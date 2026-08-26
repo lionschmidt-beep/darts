@@ -98,6 +98,23 @@
   .gctl{display:flex; gap:8px; margin-top:10px;}
   .gctl .btn{flex:1;}
 
+  /* Sprach-Eingabe ("Bike"-Modus) */
+  .voice{margin-top:12px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:12px;}
+  .voice .vhead{display:flex; gap:8px; align-items:stretch;}
+  .micbtn{flex:1; display:flex; align-items:center; justify-content:center; gap:9px; min-height:54px;
+    border:1px solid var(--line); border-radius:13px; background:var(--card2); color:var(--text);
+    font-size:16px; font-weight:700; cursor:pointer; user-select:none; padding:0 12px;}
+  .micbtn:active{transform:scale(.98);}
+  .micbtn.on{background:var(--red); border-color:transparent; color:#fff; animation:vpulse 1.5s ease-in-out infinite;}
+  .micbtn:disabled{opacity:.5; cursor:default;}
+  .ttsbtn{width:56px; min-height:54px; font-size:22px; border:1px solid var(--line); border-radius:13px;
+    background:var(--card2); color:var(--text); cursor:pointer;}
+  .ttsbtn.off{opacity:.42;}
+  @keyframes vpulse{0%,100%{box-shadow:0 0 0 0 rgba(229,72,77,.55);} 50%{box-shadow:0 0 0 11px rgba(229,72,77,0);}}
+  .voice .vstat{font-size:13px; margin-top:10px; min-height:18px; line-height:1.45;}
+  .voice .vstat b{color:var(--text);}
+  .voice .vhint{font-size:12px; color:var(--muted); margin-top:6px; line-height:1.4;}
+
   /* Win */
   .win{text-align:center; padding:30px 0 10px;}
   .win .trophy{font-size:64px;}
@@ -118,6 +135,7 @@
 // Speicher
 // ---------------------------------------------------------------------------
 var KEY = "darts_v1";
+var VER = "1.1";
 function defaultState(){
   return {
     roster:[
@@ -234,7 +252,7 @@ function bust(){
 
 // Ein Dart. mult in {1,2,3}, num in 1..20 oder 25/50.
 function applyDart(mult, num){
-  var m = state.match; if(!m || m.finished) return;
+  var m = state.match; if(!m || m.finished) return "noop";
   var dv = dartValue(mult, num);
   snapshot();
   var p = m.players[m.currentIdx];
@@ -244,16 +262,16 @@ function applyDart(mult, num){
 
   if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Sieg
     p.score = 0; m.finished = true; m.winnerId = p.id;
-    view = "win"; save(); render(); return;
+    view = "win"; save(); render(); return "win";
   }
   // Bust: unter 0, oder (Doppel-Out) genau 1, oder 0 ohne Doppel
   if(ns<0 || (m.doubleOut && ns===1) || (ns===0 && m.doubleOut && !dv.isDouble)){
-    bust(); save(); render(); return;
+    bust(); save(); render(); return "bust";
   }
   p.score = ns;
   curMult = 1;                                          // Multiplikator zurueck auf Single
   if(m.currentTurn.length>=3) endTurn();
-  save(); render();
+  save(); render(); return "ok";
 }
 
 function countWin(id){
@@ -282,7 +300,7 @@ function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
 
 function h(){ return '<header><span class="logo">&#127919;</span><h1>Darts</h1>'
-  + '<span class="ver">v1.0</span></header>'; }
+  + '<span class="ver">v'+VER+'</span></header>'; }
 
 function renderHome(){
   var m = state.match;
@@ -402,6 +420,16 @@ function renderGame(){
     + '<button class="btn" data-act="undo">&#8630; Zurück</button>'
     + '<button class="btn" data-act="skip">Aufnahme beenden &#8594;</button>'
     + '</div>'
+    + '<div class="voice">'
+    + '<div class="vhead">'
+    + '<button class="micbtn'+(voiceOn?" on":"")+'"'+(SR?"":" disabled")+' data-act="voice">'
+      + (voiceOn ? '&#127908; &#9679; Hört zu … (tippen = Stopp)' : '&#127908; Würfe ansagen') + '</button>'
+    + '<button class="ttsbtn'+(ttsOn?"":" off")+'" data-act="tts" title="Ansage laut/leise">'
+      + (ttsOn?'&#128266;':'&#128263;') + '</button>'
+    + '</div>'
+    + '<div class="vstat" id="voiceStatus"></div>'
+    + '<div class="vhint">Doppel/Triple <b>vor</b> die Zahl: „Triple 20, 20, Doppel 5" &middot; „Bull" &middot; „daneben" &middot; „zurück" &middot; „weiter"</div>'
+    + '</div>'
     + '<button class="btn ghost danger sm" data-act="quit" style="width:auto;margin:12px auto 0">Spiel abbrechen</button>';
 }
 
@@ -421,6 +449,7 @@ function renderWin(){
 }
 
 function render(){
+  if(view!=="game" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro nur im Spiel
   var el = document.getElementById("app");
   var html;
   if(view==="game" && state.match && !state.match.finished) html = renderGame();
@@ -430,6 +459,200 @@ function render(){
   else { view="home"; html = renderHome(); }
   el.innerHTML = html;
   window.scrollTo(0,0);
+  if(view==="game") updateVoiceStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Sprach-Eingabe ("Bike"-Modus): Wuerfe laut ansagen -> automatisch eintragen
+// ---------------------------------------------------------------------------
+var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+var recog = null;
+var voiceOn = false;
+var ttsOn = true;
+var speaking = false;
+var voiceMsg = "";
+
+// -- Sprach-Ausgabe (damit man bei weggelegtem Handy HOERT, was erkannt wurde)
+function say(txt){
+  if(!ttsOn || !("speechSynthesis" in window)) return;
+  try{
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(txt);
+    u.lang = "de-DE"; u.rate = 1.05;
+    speaking = true;                                   // eigenes Echo nicht mitschreiben
+    u.onend  = function(){ speaking = false; };
+    u.onerror= function(){ speaking = false; };
+    speechSynthesis.speak(u);
+    setTimeout(function(){ speaking = false; }, Math.min(6000, 700 + txt.length*90));
+  }catch(e){ speaking = false; }
+}
+
+// -- Wortlisten fuer den Parser (Artikel wie "ein/eine" bewusst RAUS -> keine Geister-1en)
+var ZAHLWORT = {
+  "null":0,"eins":1,"zwei":2,"zwo":2,"drei":3,"vier":4,
+  "fuenf":5,"fünf":5,"funf":5,"sechs":6,"sieben":7,"acht":8,"neun":9,"zehn":10,
+  "elf":11,"zwoelf":12,"zwölf":12,"zwolf":12,"dreizehn":13,"vierzehn":14,
+  "fuenfzehn":15,"fünfzehn":15,"funfzehn":15,"sechzehn":16,"siebzehn":17,
+  "achtzehn":18,"neunzehn":19,"zwanzig":20,
+  "fuenfundzwanzig":25,"fünfundzwanzig":25,"funfundzwanzig":25,
+  "fuenfzig":50,"fünfzig":50,"funfzig":50
+};
+function multWord(w){
+  if(/^(doppel|doppelt|doppelte|doppelten|double|zweifach)$/.test(w)) return 2;
+  if(/^(dreifach|dreifache|dreifachen|tripel|triple|threefold|dreier)$/.test(w)) return 3;
+  return 0;
+}
+function normName(s){ return String(s).toLowerCase().replace(/ß/g,"ss").trim(); }
+function currentNames(){
+  var m=state.match, ns=[];
+  if(m) m.players.forEach(function(p){ ns.push(normName(p.name)); });
+  return ns;
+}
+function nameMatches(spoken, actual){
+  var a=normName(spoken), b=normName(actual);
+  if(!a||!b) return false;
+  return a===b || b.indexOf(a)===0 || a.indexOf(b)===0;
+}
+function sayLabel(mult,num){
+  if(num===50) return "Bull";
+  if(num===25) return "25";
+  if(num===0)  return "daneben";
+  if(mult===3) return "Triple "+num;
+  if(mult===2) return "Doppel "+num;
+  return ""+num;
+}
+
+// -- Der Parser: gesprochener Satz -> Liste von Wuerfen (max 3).
+//    Multiplikator steht IMMER VOR der Zahl ("Doppel 2"), wie man deutsch spricht;
+//    genau das loest Lions Beispiel "14, doppelt 2, 3" korrekt zu S14/D2/S3 auf.
+function parseSpeech(text, names){
+  names = names || [];
+  var out = {throws:[], name:null, cmd:null, raw:text};
+  var s = (text||"").toLowerCase().replace(/[.,;:!?]/g," ").replace(/-/g," ").replace(/\s+/g," ").trim();
+  if(!s) return out;
+  if(/\b(zurueck|zurück|rueckgaengig|rückgängig|falsch|korrektur|revidieren)\b/.test(s)) out.cmd="undo";
+  else if(/\b(weiter|naechster|nächster|fertig|beenden)\b/.test(s)) out.cmd="skip";
+  else if(/\b(stopp|stop|aufhoeren|aufhören|hoer auf|hör auf|mikro aus)\b/.test(s)) out.cmd="stop";
+  var words = s.split(" ");
+  var toks = [];
+  for(var i=0;i<words.length;i++){
+    var w = words[i];
+    if(names.indexOf(w)>=0){ if(!out.name) out.name=w; continue; }   // Namen nicht als Wurf werten
+    var mv = multWord(w); if(mv){ toks.push({t:"m",v:mv}); continue; }
+    if(/^(bull|bulls|bullseye|bulle|bullsauge)$/.test(w)){ toks.push({t:"v",v:50}); continue; }
+    if(/^(daneben|vorbei|verfehlt|nix|nichts|miss|fehlwurf)$/.test(w)){ toks.push({t:"v",v:0}); continue; }
+    if(ZAHLWORT.hasOwnProperty(w)){ toks.push({t:"v",v:ZAHLWORT[w]}); continue; }
+    if(/^\d+$/.test(w)){ toks.push({t:"v",v:parseInt(w,10)}); continue; }
+  }
+  var pending=1, pset=false;
+  for(var j=0;j<toks.length;j++){
+    var tk=toks[j];
+    if(tk.t==="m"){ pending=tk.v; pset=true; continue; }
+    var num=tk.v, mult=1;
+    if(num===0||num===25||num===50){ pset=false; }
+    else if(num>=1 && num<=20){ if(pset){ mult=pending; pset=false; } }
+    else { pset=false; continue; }                       // ungueltige Zahl (>20) -> verwerfen
+    var dv = dartValue(mult, num);
+    out.throws.push({mult:mult, num:num, label:dv.label, say:sayLabel(mult,num)});
+    if(out.throws.length>=3) break;                      // eine Aufnahme = max 3 Darts
+  }
+  return out;
+}
+
+// -- Erkennung starten / stoppen (Auto-Neustart faengt iOS-Abbrueche + no-speech ab)
+function ensureRecog(){
+  if(recog || !SR) return;
+  recog = new SR();
+  recog.lang="de-DE"; recog.continuous=true; recog.interimResults=false; recog.maxAlternatives=4;
+  recog.onresult = function(ev){
+    if(speaking) return;                                 // eigene TTS-Stimme ignorieren
+    var res = ev.results[ev.results.length-1];
+    if(!res.isFinal) return;
+    var names = currentNames();
+    var best=null, bestTxt="";
+    for(var i=0;i<res.length;i++){                        // beste Alternative nehmen, die parsebar ist
+      var t=(res[i]&&res[i].transcript)||"";
+      var p=parseSpeech(t, names);
+      if(!best || p.throws.length>best.throws.length){ best=p; bestTxt=t; }
+      if(best && best.throws.length>=1) break;
+    }
+    if(best) applySpokenResult(best, bestTxt);
+  };
+  recog.onerror = function(ev){
+    if(ev.error==="not-allowed" || ev.error==="service-not-allowed"){
+      voiceOn=false; voiceMsg="Mikrofon nicht erlaubt – im Browser freigeben."; render();
+    }
+    // no-speech / aborted / network: onend uebernimmt den Neustart
+  };
+  recog.onend = function(){
+    if(voiceOn){
+      try{ recog.start(); }
+      catch(e){ setTimeout(function(){ if(voiceOn){ try{recog.start();}catch(e2){} } }, 350); }
+    }
+    updateVoiceStatus();
+  };
+}
+function startVoice(){
+  if(!SR){ voiceMsg="Sprache: dieser Browser kann es nicht (Chrome/Android nutzen)."; return; }
+  if(voiceOn) return;
+  ensureRecog();
+  voiceOn=true; voiceMsg="";
+  try{ recog.start(); }catch(e){}
+  say("Sprachmodus an. Sag deine Würfe.");               // entsperrt zugleich iOS-Sprachausgabe
+}
+function stopVoice(){
+  voiceOn=false;
+  if(recog){ try{ recog.abort(); }catch(e){} }
+  try{ if("speechSynthesis" in window) speechSynthesis.cancel(); }catch(e){}
+}
+function updateVoiceStatus(msg){
+  if(typeof msg==="string") voiceMsg=msg;
+  var el=document.getElementById("voiceStatus");
+  if(!el) return;
+  if(!SR){ el.innerHTML='<span class="muted">Von diesem Browser nicht unterstützt – bitte Chrome (Android).</span>'; return; }
+  if(!voiceOn){ el.innerHTML='<span class="muted">Mikro aus.</span>'+(voiceMsg?' '+voiceMsg:''); return; }
+  el.innerHTML='<span style="color:var(--green)">&#9679; hört zu …</span>'+(voiceMsg?' &nbsp;'+voiceMsg:'');
+}
+
+// -- Erkanntes umsetzen: Kommandos, Namens-Check, dann Wuerfe eintragen + Rueckmeldung
+function applySpokenResult(p, rawTxt){
+  var m=state.match; if(!m || m.finished) return;
+  if(p.cmd && p.throws.length===0){
+    if(p.cmd==="undo"){ undo(); updateVoiceStatus("&#8617;&#65039; letzter Wurf zurück"); say("Zurück"); return; }
+    if(p.cmd==="skip"){ snapshot(); endTurn(); save(); render(); updateVoiceStatus("&#8594; nächster Spieler"); say("Nächster"); return; }
+    if(p.cmd==="stop"){ stopVoice(); render(); return; }
+  }
+  if(p.throws.length===0){
+    updateVoiceStatus('nicht verstanden: „'+esc(rawTxt||"")+'“'); return;
+  }
+  var cur = m.players[m.currentIdx];
+  if(p.name && !nameMatches(p.name, cur.name)){          // vor falschem Spieler schuetzen
+    updateVoiceStatus('&#9888;&#65039; „'+esc(p.name)+'“ gesagt, aber <b>'+esc(cur.name)+'</b> ist dran – nichts eingetragen.');
+    say(cur.name+" ist dran, nicht "+p.name);
+    return;
+  }
+  var idxBefore=m.currentIdx, applied=[], event="ok";
+  for(var k=0;k<p.throws.length;k++){
+    if(!state.match || state.match.finished) break;
+    if(state.match.currentIdx!==idxBefore) break;         // Aufnahme lief voll -> Rest verwerfen
+    var th=p.throws[k];
+    var r=applyDart(th.mult, th.num);                     // rendert selbst
+    if(r==="noop") break;
+    applied.push(th);
+    if(r==="win"){ event="win"; break; }
+    if(r==="bust"){ event="bust"; break; }
+    if(state.match && state.match.currentIdx!==idxBefore){ event="full"; break; }
+  }
+  var labels = applied.map(function(a){return a.label;}).join(" ");
+  var spoken = applied.map(function(a){return a.say;}).join(", ");
+  if(event==="win"){ say("Spiel! "+cur.name+" gewinnt."); return; }
+  if(event==="bust"){
+    updateVoiceStatus('&#128165; '+esc(cur.name)+': '+esc(labels)+' – überworfen, zurück auf <b>'+cur.score+'</b>');
+    say(spoken+". Überworfen. Zurück auf "+cur.score); return;
+  }
+  var extra = (applied.length<p.throws.length) ? ' (Aufnahme voll, Rest verworfen)' : '';
+  updateVoiceStatus('&#127919; '+esc(cur.name)+': <b>'+esc(labels)+'</b> &middot; Rest <b>'+cur.score+'</b>'+extra);
+  say(spoken+". Rest "+cur.score);
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +704,10 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="skip"){ if(state.match&&!state.match.finished){ snapshot(); endTurn(); save(); render(); } return; }
   if(act==="quit"){ if(confirm("Spiel abbrechen? Kein Sieg wird gezählt.")){ state.match=null; view="home"; save(); render(); } return; }
 
+  // Sprach-Eingabe
+  if(act==="voice"){ if(voiceOn){ stopVoice(); } else { startVoice(); } render(); return; }
+  if(act==="tts"){ ttsOn=!ttsOn; if(!ttsOn){ try{ if("speechSynthesis" in window) speechSynthesis.cancel(); }catch(e){} } render(); return; }
+
   // Win
   if(act==="winagain"){
     countWin(state.match.winnerId);
@@ -494,6 +721,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
+  parseSpeech:parseSpeech, applySpokenResult:applySpokenResult,
   render:render, getMatch:function(){return state.match;},
   setScore:function(i,s){ state.match.players[i].score=s;
     state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
