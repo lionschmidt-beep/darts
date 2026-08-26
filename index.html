@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Darts">
+<title>Darts</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AF%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0f1115; --card:#1a1d24; --card2:#20242d; --line:#2a2f3a;
+    --text:#e9e7e0; --muted:#8b93a3; --green:#22c55e; --red:#e5484d;
+    --gold:#f5c451; --accent:#22c55e; --shadow:0 6px 20px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;}
+  body{min-height:100vh;}
+  #app{max-width:520px; margin:0 auto; padding:0 14px calc(env(safe-area-inset-bottom) + 20px);}
+  header{position:sticky; top:0; z-index:5; background:linear-gradient(180deg,var(--bg) 70%,transparent);
+    padding:calc(env(safe-area-inset-top) + 12px) 0 10px; display:flex; align-items:center; gap:10px;}
+  header .logo{font-size:22px;}
+  header h1{font-size:18px; font-weight:700; margin:0; letter-spacing:.3px; flex:1;}
+  header .ver{font-size:11px; color:var(--muted);}
+  .btn{display:flex; align-items:center; justify-content:center; gap:8px;
+    min-height:50px; padding:0 16px; border:none; border-radius:14px; cursor:pointer;
+    font-size:16px; font-weight:600; color:var(--text); background:var(--card2);
+    border:1px solid var(--line); width:100%; user-select:none;}
+  .btn:active{transform:scale(.98);}
+  .btn.primary{background:var(--accent); color:#08240f; border-color:transparent;}
+  .btn.ghost{background:transparent;}
+  .btn.danger{color:var(--red); border-color:#3a2a2d;}
+  .btn.sm{min-height:40px; font-size:14px; padding:0 12px; border-radius:11px; width:auto;}
+  .row{display:flex; gap:10px;}
+  .stack{display:flex; flex-direction:column; gap:10px;}
+  .muted{color:var(--muted);}
+  .center{text-align:center;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px;}
+
+  /* Rangliste */
+  .rank{display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line);}
+  .rank:last-child{border-bottom:none;}
+  .rank .pos{width:26px; font-size:18px; font-weight:800; color:var(--muted); text-align:center;}
+  .rank .pos.gold{color:var(--gold);}
+  .rank .nm{flex:1; font-size:17px; font-weight:600;}
+  .rank .nm .badge{font-size:11px; color:var(--muted); margin-left:6px; border:1px solid var(--line);
+    padding:1px 6px; border-radius:8px;}
+  .rank .wins{font-size:18px; font-weight:800;}
+  .rank .wins small{font-size:12px; color:var(--muted); font-weight:600; margin-left:3px;}
+
+  /* Setup */
+  .pick{display:flex; align-items:center; gap:12px; padding:13px; border:1px solid var(--line);
+    border-radius:13px; background:var(--card2); margin-bottom:8px; cursor:pointer;}
+  .pick.on{border-color:var(--accent); background:rgba(34,197,94,.10);}
+  .pick .dot{width:22px; height:22px; border-radius:50%; border:2px solid var(--line); flex:none;}
+  .pick.on .dot{border-color:var(--accent); background:var(--accent);}
+  .pick .nm{flex:1; font-weight:600;}
+  .seg{display:flex; gap:8px;}
+  .seg .btn{flex:1;}
+  .seg .btn.on{background:var(--accent); color:#08240f; border-color:transparent;}
+  input.txt{width:100%; min-height:50px; background:var(--card2); border:1px solid var(--line);
+    border-radius:13px; color:var(--text); font-size:16px; padding:0 14px; outline:none;}
+  input.txt:focus{border-color:var(--accent);}
+  label.lbl{font-size:13px; color:var(--muted); margin:2px 2px 6px; display:block;}
+
+  /* Game scoreboard */
+  .board{display:flex; gap:8px; margin-bottom:12px;}
+  .pcard{flex:1; background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:10px 8px; text-align:center; position:relative;}
+  .pcard.active{border-color:var(--accent); background:rgba(34,197,94,.08); box-shadow:var(--shadow);}
+  .pcard .pn{font-size:13px; color:var(--muted); font-weight:700; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;}
+  .pcard.active .pn{color:var(--accent);}
+  .pcard .ps{font-size:34px; font-weight:800; line-height:1.05; margin:2px 0;}
+  .pcard .pmeta{font-size:11px; color:var(--muted);}
+  .pcard .arrow{position:absolute; top:-9px; left:50%; transform:translateX(-50%); font-size:12px;}
+
+  .turn{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:12px; margin-bottom:12px;}
+  .turn .slots{display:flex; gap:8px; margin-bottom:8px;}
+  .slot{flex:1; height:52px; border-radius:12px; border:1px dashed var(--line); display:flex;
+    align-items:center; justify-content:center; font-size:18px; font-weight:800; color:var(--muted);
+    background:var(--card2);}
+  .slot.filled{border-style:solid; border-color:var(--accent); color:var(--text);}
+  .turn .info{display:flex; justify-content:space-between; align-items:center; font-size:13px;}
+  .turn .co{color:var(--gold); font-weight:700;}
+  .turn .sum{color:var(--muted);} .turn .sum b{color:var(--text);}
+
+  .mult{display:flex; gap:8px; margin-bottom:8px;}
+  .mult .btn{flex:1; min-height:46px;}
+  .mult .btn.on{background:var(--accent); color:#08240f; border-color:transparent;}
+
+  .pad{display:grid; grid-template-columns:repeat(5,1fr); gap:7px;}
+  .pad .btn{min-height:52px; font-size:18px; padding:0; border-radius:12px; background:var(--card2);}
+  .pad .btn.bull{color:var(--red);} .pad .btn.miss{color:var(--muted);}
+  .gctl{display:flex; gap:8px; margin-top:10px;}
+  .gctl .btn{flex:1;}
+
+  /* Win */
+  .win{text-align:center; padding:30px 0 10px;}
+  .win .trophy{font-size:64px;}
+  .win h2{font-size:26px; margin:10px 0 4px;}
+  .win .sub{color:var(--muted); margin-bottom:22px;}
+
+  .fab{margin-top:8px;}
+  .hint{font-size:12px; color:var(--muted); text-align:center; margin-top:14px;}
+  a{color:var(--accent);}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Speicher
+// ---------------------------------------------------------------------------
+var KEY = "darts_v1";
+function defaultState(){
+  return {
+    roster:[
+      {id:"arne",   name:"Arne",   wins:3, guest:false},
+      {id:"justus", name:"Justus", wins:2, guest:false},
+      {id:"lion",   name:"Lion",   wins:1, guest:false}
+    ],
+    match:null
+  };
+}
+function load(){
+  try{ var s=JSON.parse(localStorage.getItem(KEY)); if(s&&s.roster) return s; }catch(e){}
+  return defaultState();
+}
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+
+var state = load();
+var view  = "home";      // home | roster | setup | game | win
+var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
+var setupSel = null;     // {selected:Set, gameType, doubleOut}
+
+// ---------------------------------------------------------------------------
+// Darts-Regeln: Wurf-Werte, Checkout-Rechner
+// ---------------------------------------------------------------------------
+function dartValue(mult, num){
+  if(num===25) return {value:25, isDouble:false, label:"25"};       // aeusserer Bull = Single
+  if(num===50) return {value:50, isDouble:true,  label:"Bull"};     // Bull = Doppel-25
+  var pre = mult===3 ? "T" : (mult===2 ? "D" : "");
+  return {value:num*mult, isDouble:mult===2, label:pre+num};
+}
+
+// Alle moeglichen Einzelwuerfe (fuer den Checkout-Rechner), absteigend sortiert.
+var DOUBLES = [];  for(var n=1;n<=20;n++) DOUBLES.push({value:n*2, label:"D"+n}); DOUBLES.push({value:50,label:"Bull"});
+var ALLTHROWS = [];
+for(var n=1;n<=20;n++) ALLTHROWS.push({value:n*3, label:"T"+n});
+for(var n=1;n<=20;n++) ALLTHROWS.push({value:n*2, label:"D"+n});
+for(var n=1;n<=20;n++) ALLTHROWS.push({value:n,   label:""+n});
+ALLTHROWS.push({value:25,label:"25"}); ALLTHROWS.push({value:50,label:"Bull"});
+ALLTHROWS.sort(function(a,b){return b.value-a.value;}); // "hoch zielen zuerst"
+
+// Kuerzestes Finish fuer 'score' mit hoechstens 'dartsLeft' Darts.
+// doubleOut=true -> der letzte Dart muss ein Doppel (oder Bull) sein.
+function checkout(score, dartsLeft, doubleOut){
+  if(score<=0 || score>170) return null;
+  var finishers = doubleOut ? DOUBLES : ALLTHROWS;
+  var i,j,rem,d;
+  // 1 Dart
+  for(i=0;i<finishers.length;i++) if(finishers[i].value===score) return [finishers[i].label];
+  if(dartsLeft<2) return null;
+  // 2 Darts
+  for(i=0;i<ALLTHROWS.length;i++){
+    rem = score-ALLTHROWS[i].value; if(rem<=0) continue;
+    d = finishers.find(function(x){return x.value===rem;});
+    if(d) return [ALLTHROWS[i].label, d.label];
+  }
+  if(dartsLeft<3) return null;
+  // 3 Darts
+  for(i=0;i<ALLTHROWS.length;i++){
+    for(j=0;j<ALLTHROWS.length;j++){
+      rem = score-ALLTHROWS[i].value-ALLTHROWS[j].value; if(rem<=0) continue;
+      d = finishers.find(function(x){return x.value===rem;});
+      if(d) return [ALLTHROWS[i].label, ALLTHROWS[j].label, d.label];
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Spiel-Logik
+// ---------------------------------------------------------------------------
+function startMatch(playerIds, gameType, doubleOut){
+  var players = playerIds.map(function(id){
+    var r = state.roster.find(function(p){return p.id===id;});
+    return {id:id, name:r?r.name:id, score:gameType, darts:0};
+  });
+  state.match = {
+    gameType:gameType, doubleOut:doubleOut, players:players,
+    currentIdx:0, currentTurn:[], turnStartScore:gameType,
+    finished:false, winnerId:null, _undo:[]
+  };
+  curMult = 1; view = "game"; save();
+}
+
+function snapshot(){
+  var m = state.match;
+  m._undo.push(JSON.stringify({
+    players:m.players, currentIdx:m.currentIdx, currentTurn:m.currentTurn,
+    turnStartScore:m.turnStartScore, finished:m.finished, winnerId:m.winnerId
+  }));
+  if(m._undo.length>60) m._undo.shift();
+}
+function undo(){
+  var m = state.match; if(!m || !m._undo.length) return;
+  var s = JSON.parse(m._undo.pop());
+  m.players=s.players; m.currentIdx=s.currentIdx; m.currentTurn=s.currentTurn;
+  m.turnStartScore=s.turnStartScore; m.finished=s.finished; m.winnerId=s.winnerId;
+  curMult = 1; view = "game"; save(); render();
+}
+
+function endTurn(){
+  var m = state.match;
+  m.currentTurn = [];
+  m.currentIdx = (m.currentIdx+1) % m.players.length;
+  m.turnStartScore = m.players[m.currentIdx].score;
+  curMult = 1;
+}
+
+function bust(){
+  var m = state.match;
+  var p = m.players[m.currentIdx];
+  p.score = m.turnStartScore;   // ganzer Aufnahme-Wurf zurueck
+  endTurn();
+}
+
+// Ein Dart. mult in {1,2,3}, num in 1..20 oder 25/50.
+function applyDart(mult, num){
+  var m = state.match; if(!m || m.finished) return;
+  var dv = dartValue(mult, num);
+  snapshot();
+  var p = m.players[m.currentIdx];
+  m.currentTurn.push({label:dv.label, value:dv.value});
+  p.darts++;
+  var ns = p.score - dv.value;
+
+  if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Sieg
+    p.score = 0; m.finished = true; m.winnerId = p.id;
+    view = "win"; save(); render(); return;
+  }
+  // Bust: unter 0, oder (Doppel-Out) genau 1, oder 0 ohne Doppel
+  if(ns<0 || (m.doubleOut && ns===1) || (ns===0 && m.doubleOut && !dv.isDouble)){
+    bust(); save(); render(); return;
+  }
+  p.score = ns;
+  curMult = 1;                                          // Multiplikator zurueck auf Single
+  if(m.currentTurn.length>=3) endTurn();
+  save(); render();
+}
+
+function countWin(id){
+  var r = state.roster.find(function(p){return p.id===id;});
+  if(r) r.wins = (r.wins||0)+1;
+}
+
+// ---------------------------------------------------------------------------
+// Roster-Verwaltung
+// ---------------------------------------------------------------------------
+function slug(name){
+  return name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"") || ("p"+Date.now());
+}
+function addPlayer(name, guest){
+  name = (name||"").trim(); if(!name) return;
+  var id = slug(name);
+  while(state.roster.some(function(p){return p.id===id;})) id += "x";
+  state.roster.push({id:id, name:name, wins:0, guest:!!guest});
+  save();
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+
+function h(){ return '<header><span class="logo">&#127919;</span><h1>Darts</h1>'
+  + '<span class="ver">v1.0</span></header>'; }
+
+function renderHome(){
+  var m = state.match;
+  var sorted = state.roster.slice().sort(function(a,b){
+    return (b.wins-a.wins) || a.name.localeCompare(b.name); });
+  var rows = sorted.map(function(p,i){
+    return '<div class="rank">'
+      + '<div class="pos'+(i===0&&p.wins>0?" gold":"")+'">'+(i+1)+'</div>'
+      + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
+      + '<div class="wins">'+(p.wins||0)+'<small>Wins</small></div>'
+      + '</div>';
+  }).join("");
+  var resume = (m && !m.finished)
+    ? '<button class="btn primary fab" data-act="resume">&#9654;&nbsp; Spiel fortsetzen ('
+      + m.players.map(function(p){return esc(p.name)+" "+p.score;}).join(" &middot; ") + ')</button>'
+      + '<button class="btn ghost sm" data-act="abort" style="width:auto;margin:6px auto 0">Aktuelles Spiel verwerfen</button>'
+    : '';
+  return h()
+    + (resume ? '<div style="margin-bottom:12px">'+resume+'</div>' : '')
+    + '<div class="card" style="margin-bottom:14px"><div style="font-size:13px;color:var(--muted);'
+      + 'font-weight:700;margin-bottom:4px">RANGLISTE</div>'+rows+'</div>'
+    + '<div class="stack">'
+    + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
+    + '<button class="btn" data-act="nav" data-view="roster">&#128101;&nbsp; Team verwalten</button>'
+    + '</div>'
+    + '<div class="hint">Team, Punkte und laufendes Spiel bleiben auf diesem Handy gespeichert.</div>';
+}
+
+function renderRoster(){
+  var rows = state.roster.map(function(p){
+    return '<div class="rank">'
+      + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')
+        + ' <span class="muted" style="font-size:13px">&middot; '+(p.wins||0)+' Wins</span></div>'
+      + '<button class="btn sm ghost" data-act="rename" data-id="'+p.id+'">Umben.</button>'
+      + '<button class="btn sm danger" data-act="del" data-id="'+p.id+'">&#128465;</button>'
+      + '</div>';
+  }).join("");
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<div class="card" style="margin-bottom:14px">'+rows+'</div>'
+    + '<label class="lbl">Neuer Spieler oder Gast</label>'
+    + '<input class="txt" id="newName" placeholder="Name eingeben" autocomplete="off">'
+    + '<div class="row" style="margin-top:10px">'
+    + '<button class="btn primary" data-act="add" data-guest="0">Zum Team</button>'
+    + '<button class="btn" data-act="add" data-guest="1">Als Gast</button>'
+    + '</div>'
+    + '<button class="btn ghost danger sm" data-act="resetwins" style="width:auto;margin:18px auto 0">Rangliste zurücksetzen</button>';
+}
+
+function renderSetup(){
+  if(!setupSel){
+    setupSel = {selected:new Set(state.roster.slice(0,3).map(function(p){return p.id;})),
+                gameType:501, doubleOut:true};
+  }
+  var picks = state.roster.map(function(p){
+    var on = setupSel.selected.has(p.id);
+    return '<div class="pick'+(on?" on":"")+'" data-act="pick" data-id="'+p.id+'">'
+      + '<div class="dot"></div><div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
+      + '</div>';
+  }).join("");
+  function seg(g){ return '<button class="btn'+(setupSel.gameType===g?" on":"")+'" data-act="gt" data-g="'+g+'">'+g+'</button>'; }
+  var nSel = setupSel.selected.size;
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<label class="lbl">Wer spielt mit? ('+nSel+' gewählt)</label>'
+    + picks
+    + '<label class="lbl" style="margin-top:14px">Spielmodus</label>'
+    + '<div class="seg">'+seg(301)+seg(501)+seg(701)+'</div>'
+    + '<label class="lbl" style="margin-top:14px">Ausgang</label>'
+    + '<div class="seg">'
+    + '<button class="btn'+(setupSel.doubleOut?" on":"")+'" data-act="do" data-v="1">Doppel-Out</button>'
+    + '<button class="btn'+(!setupSel.doubleOut?" on":"")+'" data-act="do" data-v="0">Beliebig</button>'
+    + '</div>'
+    + '<button class="btn primary" data-act="start" style="margin-top:20px">Los geht\'s &#127919;</button>'
+    + (nSel<1 ? '<div class="hint">Mindestens einen Spieler wählen.</div>' : '');
+}
+
+function renderGame(){
+  var m = state.match;
+  var cur = m.players[m.currentIdx];
+  var cards = m.players.map(function(p,i){
+    var avg = p.darts ? ((m.gameType-p.score)/p.darts*3).toFixed(1) : "0.0";
+    return '<div class="pcard'+(i===m.currentIdx?" active":"")+'">'
+      + (i===m.currentIdx?'<span class="arrow">&#9660;</span>':'')
+      + '<div class="pn">'+esc(p.name)+'</div>'
+      + '<div class="ps">'+p.score+'</div>'
+      + '<div class="pmeta">&#8960; '+avg+' &middot; '+p.darts+' D</div>'
+      + '</div>';
+  }).join("");
+
+  var slots = "";
+  for(var i=0;i<3;i++){
+    var d = m.currentTurn[i];
+    slots += '<div class="slot'+(d?" filled":"")+'">'+(d?esc(d.label):"&middot;")+'</div>';
+  }
+  var turnSum = m.currentTurn.reduce(function(s,d){return s+d.value;},0);
+  var co = checkout(cur.score, 3-m.currentTurn.length, m.doubleOut);
+  var coHtml = co ? '<span class="co">Finish: '+co.join(" ")+'</span>' : '<span class="muted">&nbsp;</span>';
+
+  function mb(mv,l){ return '<button class="btn'+(curMult===mv?" on":"")+'" data-act="mult" data-m="'+mv+'">'+l+'</button>'; }
+  var nums = "";
+  for(var nn=1;nn<=20;nn++) nums += '<button class="btn" data-act="num" data-n="'+nn+'">'+nn+'</button>';
+
+  return h()
+    + '<div class="board">'+cards+'</div>'
+    + '<div class="turn">'
+    + '<div class="slots">'+slots+'</div>'
+    + '<div class="info">'+coHtml+'<span class="sum">Aufnahme: <b>'+turnSum+'</b></span></div>'
+    + '</div>'
+    + '<div class="mult">'+mb(1,"Single")+mb(2,"Double")+mb(3,"Triple")+'</div>'
+    + '<div class="pad">'+nums
+    + '<button class="btn miss" data-act="num" data-n="0">Miss</button>'
+    + '<button class="btn" data-act="num" data-n="25">25</button>'
+    + '<button class="btn bull" data-act="num" data-n="50">Bull</button>'
+    + '</div>'
+    + '<div class="gctl">'
+    + '<button class="btn" data-act="undo">&#8630; Zurück</button>'
+    + '<button class="btn" data-act="skip">Aufnahme beenden &#8594;</button>'
+    + '</div>'
+    + '<button class="btn ghost danger sm" data-act="quit" style="width:auto;margin:12px auto 0">Spiel abbrechen</button>';
+}
+
+function renderWin(){
+  var m = state.match;
+  var w = m.players.find(function(p){return p.id===m.winnerId;});
+  var avg = w && w.darts ? ((m.gameType)/w.darts*3).toFixed(1) : "-";
+  return h()
+    + '<div class="win"><div class="trophy">&#127942;</div>'
+    + '<h2>'+esc(w?w.name:"?")+' gewinnt!</h2>'
+    + '<div class="sub">'+m.gameType+' &middot; '+(w?w.darts:0)+' Darts &middot; &#8960; '+avg+'</div></div>'
+    + '<div class="stack">'
+    + '<button class="btn primary" data-act="winagain">Sieg zählen &middot; nochmal</button>'
+    + '<button class="btn" data-act="winhome">Sieg zählen &middot; zur Rangliste</button>'
+    + '<button class="btn ghost" data-act="undo">&#8630; Doch nicht – letzten Dart zurück</button>'
+    + '</div>';
+}
+
+function render(){
+  var el = document.getElementById("app");
+  var html;
+  if(view==="game" && state.match && !state.match.finished) html = renderGame();
+  else if(view==="win" && state.match && state.match.finished) html = renderWin();
+  else if(view==="roster") html = renderRoster();
+  else if(view==="setup") html = renderSetup();
+  else { view="home"; html = renderHome(); }
+  el.innerHTML = html;
+  window.scrollTo(0,0);
+}
+
+// ---------------------------------------------------------------------------
+// Ein Klick-Handler fuer alles (Delegation -> ueberlebt jedes Re-Render)
+// ---------------------------------------------------------------------------
+document.getElementById("app").addEventListener("click", function(ev){
+  var t = ev.target.closest("[data-act]"); if(!t) return;
+  var act = t.getAttribute("data-act");
+
+  if(act==="nav"){ view=t.getAttribute("data-view"); if(view==="setup") setupSel=null; render(); return; }
+  if(act==="resume"){ view="game"; render(); return; }
+  if(act==="abort"){ if(confirm("Aktuelles Spiel verwerfen?")){ state.match=null; save(); render(); } return; }
+
+  // Roster
+  if(act==="add"){
+    var inp=document.getElementById("newName");
+    addPlayer(inp.value, t.getAttribute("data-guest")==="1"); render(); return;
+  }
+  if(act==="rename"){
+    var id=t.getAttribute("data-id"); var p=state.roster.find(function(x){return x.id===id;});
+    var nn=prompt("Neuer Name:", p?p.name:""); if(nn&&nn.trim()){ p.name=nn.trim(); save(); render(); } return;
+  }
+  if(act==="del"){
+    var id2=t.getAttribute("data-id"); var p2=state.roster.find(function(x){return x.id===id2;});
+    if(confirm("„"+(p2?p2.name:"")+"“ löschen?")){
+      state.roster=state.roster.filter(function(x){return x.id!==id2;}); save(); render();
+    } return;
+  }
+  if(act==="resetwins"){
+    if(confirm("Alle Wins auf 0 setzen?")){ state.roster.forEach(function(p){p.wins=0;}); save(); render(); } return;
+  }
+
+  // Setup
+  if(act==="pick"){ var pid=t.getAttribute("data-id");
+    if(setupSel.selected.has(pid)) setupSel.selected.delete(pid); else setupSel.selected.add(pid);
+    render(); return; }
+  if(act==="gt"){ setupSel.gameType=parseInt(t.getAttribute("data-g"),10); render(); return; }
+  if(act==="do"){ setupSel.doubleOut = t.getAttribute("data-v")==="1"; render(); return; }
+  if(act==="start"){
+    var ids = state.roster.filter(function(p){return setupSel.selected.has(p.id);}).map(function(p){return p.id;});
+    if(ids.length<1){ return; }
+    startMatch(ids, setupSel.gameType, setupSel.doubleOut); render(); return;
+  }
+
+  // Spiel
+  if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
+  if(act==="num"){ applyDart(curMult, parseInt(t.getAttribute("data-n"),10)); return; }
+  if(act==="undo"){ undo(); return; }
+  if(act==="skip"){ if(state.match&&!state.match.finished){ snapshot(); endTurn(); save(); render(); } return; }
+  if(act==="quit"){ if(confirm("Spiel abbrechen? Kein Sieg wird gezählt.")){ state.match=null; view="home"; save(); render(); } return; }
+
+  // Win
+  if(act==="winagain"){
+    countWin(state.match.winnerId);
+    var ids2=state.match.players.map(function(p){return p.id;});
+    startMatch(ids2, state.match.gameType, state.match.doubleOut); render(); return;
+  }
+  if(act==="winhome"){
+    countWin(state.match.winnerId); state.match=null; view="home"; save(); render(); return;
+  }
+});
+
+// Test-Haken (fuer automatische Verifikation, stoert die App nicht)
+window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
+  render:render, getMatch:function(){return state.match;},
+  setScore:function(i,s){ state.match.players[i].score=s;
+    state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
+
+render();
+</script>
+</body>
+</html>
