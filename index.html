@@ -45,11 +45,23 @@
   .rank:last-child{border-bottom:none;}
   .rank .pos{width:26px; font-size:18px; font-weight:800; color:var(--muted); text-align:center;}
   .rank .pos.gold{color:var(--gold);}
-  .rank .nm{flex:1; font-size:17px; font-weight:600;}
+  .rank .nm{flex:1; min-width:0; font-size:17px; font-weight:600;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .rank .nm .badge{font-size:11px; color:var(--muted); margin-left:6px; border:1px solid var(--line);
     padding:1px 6px; border-radius:8px;}
   .rank .wins{font-size:18px; font-weight:800;}
   .rank .wins small{font-size:12px; color:var(--muted); font-weight:600; margin-left:3px;}
+  .rank.tap{cursor:pointer;} .rank.tap:active{background:var(--card2);}
+  .rank .chev{color:var(--muted); font-size:16px; flex:none;}
+
+  /* Wins-Stepper (Team verwalten) */
+  .wctl{display:flex; align-items:center; flex:none; background:var(--card2);
+    border:1px solid var(--line); border-radius:11px; overflow:hidden;}
+  .wctl button{width:40px; min-height:42px; border:none; background:transparent; color:var(--text);
+    font-size:22px; font-weight:800; line-height:1; cursor:pointer;}
+  .wctl button:active{background:var(--line);}
+  .wctl .wv{min-width:42px; text-align:center; font-size:18px; font-weight:800; cursor:pointer;
+    padding:9px 4px; border-left:1px solid var(--line); border-right:1px solid var(--line);}
 
   /* Setup */
   .pick{display:flex; align-items:center; gap:12px; padding:13px; border:1px solid var(--line);
@@ -135,7 +147,7 @@
 // Speicher
 // ---------------------------------------------------------------------------
 var KEY = "darts_v1";
-var VER = "1.1";
+var VER = "1.2";
 function defaultState(){
   return {
     roster:[
@@ -279,6 +291,18 @@ function countWin(id){
   if(r) r.wins = (r.wins||0)+1;
 }
 
+// Wins von Hand aendern: +/- (bumpWins) oder frei setzen (setWins). Nie unter 0.
+function bumpWins(id, delta){
+  var r = state.roster.find(function(p){return p.id===id;});
+  if(!r) return;
+  r.wins = Math.max(0, (r.wins||0) + delta); save();
+}
+function setWins(id, val){
+  var r = state.roster.find(function(p){return p.id===id;});
+  if(!r) return;
+  r.wins = Math.max(0, Math.round(val||0)); save();
+}
+
 // ---------------------------------------------------------------------------
 // Roster-Verwaltung
 // ---------------------------------------------------------------------------
@@ -307,10 +331,11 @@ function renderHome(){
   var sorted = state.roster.slice().sort(function(a,b){
     return (b.wins-a.wins) || a.name.localeCompare(b.name); });
   var rows = sorted.map(function(p,i){
-    return '<div class="rank">'
+    return '<div class="rank tap" data-act="nav" data-view="roster">'
       + '<div class="pos'+(i===0&&p.wins>0?" gold":"")+'">'+(i+1)+'</div>'
       + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
       + '<div class="wins">'+(p.wins||0)+'<small>Wins</small></div>'
+      + '<div class="chev">&rsaquo;</div>'
       + '</div>';
   }).join("");
   var resume = (m && !m.finished)
@@ -321,10 +346,11 @@ function renderHome(){
   return h()
     + (resume ? '<div style="margin-bottom:12px">'+resume+'</div>' : '')
     + '<div class="card" style="margin-bottom:14px"><div style="font-size:13px;color:var(--muted);'
-      + 'font-weight:700;margin-bottom:4px">RANGLISTE</div>'+rows+'</div>'
+      + 'font-weight:700;margin-bottom:4px;display:flex;justify-content:space-between">'
+      + '<span>RANGLISTE</span><span style="font-weight:600">tippen zum Ändern &rsaquo;</span></div>'+rows+'</div>'
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
-    + '<button class="btn" data-act="nav" data-view="roster">&#128101;&nbsp; Team verwalten</button>'
+    + '<button class="btn" data-act="nav" data-view="roster">&#128101;&nbsp; Team &amp; Wins</button>'
     + '</div>'
     + '<div class="hint">Team, Punkte und laufendes Spiel bleiben auf diesem Handy gespeichert.</div>';
 }
@@ -332,14 +358,19 @@ function renderHome(){
 function renderRoster(){
   var rows = state.roster.map(function(p){
     return '<div class="rank">'
-      + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')
-        + ' <span class="muted" style="font-size:13px">&middot; '+(p.wins||0)+' Wins</span></div>'
-      + '<button class="btn sm ghost" data-act="rename" data-id="'+p.id+'">Umben.</button>'
+      + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
+      + '<div class="wctl">'
+      +   '<button data-act="win" data-id="'+p.id+'" data-d="-1" aria-label="Win abziehen">&minus;</button>'
+      +   '<span class="wv" data-act="winset" data-id="'+p.id+'" title="Antippen zum Eintragen">'+(p.wins||0)+'</span>'
+      +   '<button data-act="win" data-id="'+p.id+'" data-d="1" aria-label="Win dazu">+</button>'
+      + '</div>'
+      + '<button class="btn sm ghost" data-act="rename" data-id="'+p.id+'" style="width:auto;padding:0 11px" aria-label="Umbenennen">&#9998;</button>'
       + '<button class="btn sm danger" data-act="del" data-id="'+p.id+'">&#128465;</button>'
       + '</div>';
   }).join("");
   return h()
     + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<label class="lbl">Team &amp; Wins &middot; tippe &minus;/+ oder die Zahl zum Eintragen</label>'
     + '<div class="card" style="margin-bottom:14px">'+rows+'</div>'
     + '<label class="lbl">Neuer Spieler oder Gast</label>'
     + '<input class="txt" id="newName" placeholder="Name eingeben" autocomplete="off">'
@@ -681,6 +712,13 @@ document.getElementById("app").addEventListener("click", function(ev){
       state.roster=state.roster.filter(function(x){return x.id!==id2;}); save(); render();
     } return;
   }
+  if(act==="win"){ bumpWins(t.getAttribute("data-id"), parseInt(t.getAttribute("data-d"),10)); render(); return; }
+  if(act==="winset"){
+    var wid=t.getAttribute("data-id"); var wp=state.roster.find(function(x){return x.id===wid;});
+    var wv=prompt("Wins für "+(wp?wp.name:"")+":", wp?String(wp.wins||0):"0");
+    if(wv!==null){ var n=parseInt(wv,10); if(!isNaN(n)){ setWins(wid, n); render(); } }
+    return;
+  }
   if(act==="resetwins"){
     if(confirm("Alle Wins auf 0 setzen?")){ state.roster.forEach(function(p){p.wins=0;}); save(); render(); } return;
   }
@@ -722,6 +760,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   parseSpeech:parseSpeech, applySpokenResult:applySpokenResult,
+  bumpWins:bumpWins, setWins:setWins, getRoster:function(){return state.roster;},
   render:render, getMatch:function(){return state.match;},
   setScore:function(i,s){ state.match.players[i].score=s;
     state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
