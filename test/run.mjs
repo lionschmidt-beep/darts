@@ -36,6 +36,9 @@ function boot(seedStorage = {}) {
       addEventListener: () => {},
     },
     scrollTo: () => {},
+    addEventListener: () => {},
+    navigator: { userAgent: "test" },              // ohne serviceWorker: SW-Zweig bleibt aus
+    location: { protocol: "http:", href: "http://localhost/" },
     confirm: () => true,
     prompt: () => null,
     alert: () => {},
@@ -769,6 +772,132 @@ t("Solo-Screen und Trainings-Screen rendern", () => {
   D.render();
   ok(app.innerHTML.includes("21 von 21"), "Abschluss");
   ok(app.innerHTML.includes("Neuer Rekord"), "erster Lauf ist immer Rekord");
+});
+
+// ================================================================ Spieler-Akte
+t("playerStats zaehlt Spiele, Siege und Quote", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 1);
+  const s = D.playerStats("lion");
+  eq(s.games, 3);
+  eq(s.wins, 2);
+  eq(s.quote, 67, "2 von 3 gerundet");
+  eq(s.form, [false, true, true], "neueste zuerst - das letzte Spiel ging verloren");
+});
+
+t("Solo-Spiele zaehlen nicht in die Quote, aber in den Schnitt", () => {
+  const { D } = boot();
+  playMatch(D, ["lion"], 0);
+  playMatch(D, ["lion"], 0);
+  const s = D.playerStats("lion");
+  eq(s.games, 0, "keine Gegner, keine Bilanz");
+  eq(s.solo, 2);
+  eq(s.quote, 0);
+  ok(s.darts > 0, "Wuerfe zaehlen trotzdem");
+});
+
+t("Legs werden fuer und gegen gezaehlt", () => {
+  const { D } = boot();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setScore(0, 40); D.applyDart(2, 20);          // Leg 1 Lion
+  D.setScore(1, 40); D.applyDart(2, 20);          // Leg 2 Arne
+  D.setScore(0, 40); D.applyDart(2, 20);          // Leg 3 Lion -> Match
+  D.finishMatch();
+  const s = D.playerStats("lion");
+  eq(s.legsWon, 2);
+  eq(s.legsLost, 1);
+  eq(D.playerStats("arne").legsWon, 1);
+});
+
+t("Beste Werte sind Maxima ueber alle Spiele, egal wann sie fielen", () => {
+  const { D } = boot();
+  // state.history ist neueste-zuerst. Der Rekord liegt deshalb bewusst im
+  // AELTEREN Spiel und ein schwaecherer Wert im neueren - sonst kaeme auch ein
+  // "nimm einfach den zuletzt gelesenen" ans richtige Ergebnis.
+  const spiel = (wurf) => {
+    D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    seq(D, wurf);
+    D.setScore(1, 40); D.applyDart(2, 20);        // Arne macht aus
+    ok(D.finishMatch(), "Match beendet");
+  };
+  spiel(["20", "20", "20"]);                      // aeltestes: 60
+  spiel(["T20", "T20", "T20"]);                   // mittleres: 180  <- der Rekord
+  spiel(["20", "20", "20"]);                      // neuestes: 60
+  const s = D.playerStats("lion");
+  eq(s.best, 180, "weder das neueste noch das aelteste Spiel");
+  eq(s.t180, 1);
+  spiel(["T20", "T20", "T20"]);
+  eq(D.playerStats("lion").t180, 2, "180er werden summiert, nicht ueberschrieben");
+});
+
+t("Form haelt nur die letzten zehn Spiele", () => {
+  const { D } = boot();
+  for (let i = 0; i < 14; i++) playMatch(D, ["lion", "arne"], i < 12 ? 0 : 1);
+  const s = D.playerStats("lion");
+  eq(s.games, 14);
+  eq(s.form.length, 10, "nicht mehr als zehn");
+  eq(s.form.slice(0, 3), [false, false, true],
+     "neueste zuerst: die letzten zwei gingen an Arne");
+});
+
+t("Spieler-Akte rendert mit Duellen und Rekorden", () => {
+  const { D, app } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "justus"], 1);
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 21; i++) D.trainDart(true);
+  D.finishTraining();
+  D.setPlayerSel("lion"); D.setView("player"); D.render();
+  ok(app.innerHTML.includes("Lion"), "Name");
+  ok(app.innerHTML.includes("gegen Arne"), "Duell gegen Arne");
+  ok(app.innerHTML.includes("gegen Justus"), "Duell gegen Justus");
+  ok(app.innerHTML.includes("Doppel-Training"), "Trainings-Rekord");
+  ok(app.innerHTML.includes("Das bin ich"), "Marker setzbar");
+});
+
+t("Akte eines frischen Spielers stuerzt nicht ab", () => {
+  const { D, app } = boot();
+  D.setPlayerSel("justus"); D.setView("player"); D.render();
+  ok(app.innerHTML.includes("Noch keine Spiele"), "leerer Zustand beschriftet");
+  ok(!app.innerHTML.includes("NaN"), "keine kaputten Zahlen");
+  ok(!app.innerHTML.includes("undefined"), "keine Luecken");
+});
+
+t("Rangliste fuehrt in die Akte, nicht mehr in die Team-Liste", () => {
+  const { D, app } = boot();
+  D.setView("home"); D.render();
+  ok(app.innerHTML.includes('data-act="openplayer"'), "Zeile oeffnet die Akte");
+});
+
+// ================================================================ PWA
+t("PWA-Dateien sind vorhanden und verdrahtet", () => {
+  const need = ["manifest.webmanifest", "sw.js", "icon.svg"];
+  need.forEach(f => ok(fs.existsSync(path.join(root, f)), f + " fehlt"));
+  ok(html.includes('rel="manifest"'), "Manifest im Kopf verlinkt");
+  ok(html.includes('serviceWorker'), "Service Worker wird registriert");
+  ok(html.includes('./sw.js'), "relativer Pfad - GitHub Pages liegt unter /darts/");
+});
+
+t("Manifest ist gueltiges JSON mit den Pflichtfeldern", () => {
+  const mf = JSON.parse(fs.readFileSync(path.join(root, "manifest.webmanifest"), "utf8"));
+  eq(mf.name, "Darts");
+  eq(mf.display, "standalone");
+  eq(mf.start_url, "./", "relativ, sonst bricht der Unterpfad auf GitHub Pages");
+  ok(mf.icons.length >= 1, "mindestens ein Icon");
+  ok(mf.icons.some(i => i.purpose === "maskable"), "maskable fuer Android");
+  ok(mf.background_color && mf.theme_color, "Farben gesetzt");
+});
+
+t("Service Worker holt zuerst aus dem Netz", () => {
+  const sw = fs.readFileSync(path.join(root, "sw.js"), "utf8");
+  const fetchIdx = sw.indexOf("fetch(req)");
+  const cacheIdx = sw.indexOf("caches.match(req)");
+  ok(fetchIdx > 0 && cacheIdx > fetchIdx,
+     "network-first: sonst nagelt der SW eine alte Version auf dem Handy fest");
+  ok(sw.includes("skipWaiting"), "neue Fassung uebernimmt sofort");
+  ok(sw.includes("caches.delete"), "alte Caches werden geraeumt");
 });
 
 // ---------------------------------------------------------------- Ausgabe

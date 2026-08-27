@@ -8,6 +8,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Darts">
 <title>Darts</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon.svg">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AF%3C/text%3E%3C/svg%3E">
 <style>
   :root{
@@ -48,6 +50,20 @@
   .tmark.hit{background:var(--accent); color:#08240f; border-color:transparent;}
   .tmark.miss{color:var(--red); border-color:#3a2a2d;}
   .tmark.now{border-color:var(--accent); color:var(--text);}
+  /* Spieler-Akte */
+  .phead{display:flex; align-items:center; gap:12px; margin-bottom:12px; padding:0 3px;}
+  .phead .pname{flex:1; font-size:23px; font-weight:800; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .phead .pname .star{color:var(--gold); font-size:19px;}
+  .phead .pname .badge{font-size:11px; color:var(--muted); margin-left:7px;
+    border:1px solid var(--line); padding:1px 6px; border-radius:8px; vertical-align:middle;}
+  .phead .pwins{font-size:26px; font-weight:800; color:var(--gold); flex:none;}
+  .phead .pwins small{font-size:11px; color:var(--muted); font-weight:600; margin-left:3px;}
+  .srow{display:flex; align-items:baseline; padding:10px 2px; border-bottom:1px solid var(--line);}
+  .srow:last-child{border-bottom:none;}
+  .srow .sl{flex:1; font-size:14px; color:var(--muted); font-weight:600;}
+  .srow .sv{font-size:17px; font-weight:800;}
+  .srow .sv small{font-size:11.5px; color:var(--muted); font-weight:600;}
   .infoline{font-size:12.5px; color:var(--muted); margin:10px 3px 0;}
   .infoline b{color:var(--text); font-weight:700;}
   .pick .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:500; margin-top:2px;}
@@ -216,6 +232,7 @@
   .duel .ds{font-size:17px; font-weight:800; flex:none; letter-spacing:.5px;}
   .duel .ds i{font-style:normal; color:var(--muted); margin:0 3px; font-weight:600;}
   .duel.la .dna{color:var(--accent);} .duel.lb .dnb{color:var(--accent2);}
+  .duel.behind .dna{color:var(--accent2);}   /* in der Akte steht nur ein Name */
 
   .fab{margin-top:8px;}
   .hint{font-size:12px; color:var(--muted); text-align:center; margin-top:14px;}
@@ -232,7 +249,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.6";
+var VER    = "1.8";
 
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
@@ -325,6 +342,7 @@ var h2hSel = null;       // [idA, idB] im Direktvergleich
 var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Blick neu bestimmt
 var settingsMsg = "";    // kurze Rueckmeldung im Einstellungs-Screen
 var soloWho = null;      // wer gerade allein uebt
+var playerSel = null;    // offene Spieler-Akte
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -615,7 +633,7 @@ function renderHome(){
     return (totalWins(b.id)-totalWins(a.id)) || a.name.localeCompare(b.name); });
   var rows = sorted.map(function(p,i){
     var w = totalWins(p.id);
-    return '<div class="rank tap" data-act="nav" data-view="roster">'
+    return '<div class="rank tap" data-act="openplayer" data-id="'+p.id+'">'
       + '<div class="pos'+(i===0&&w>0?" gold":"")+'">'+(i+1)+'</div>'
       + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
       + '<div class="wins">'+w+'<small>Wins</small></div>'
@@ -631,7 +649,7 @@ function renderHome(){
     + (resume ? '<div style="margin-bottom:12px">'+resume+'</div>' : '')
     + '<div class="card" style="margin-bottom:14px"><div style="font-size:13px;color:var(--muted);'
       + 'font-weight:700;margin-bottom:4px;display:flex;justify-content:space-between">'
-      + '<span>RANGLISTE</span><span style="font-weight:600">ändern &rsaquo;</span></div>'+rows+'</div>'
+      + '<span>RANGLISTE</span><span style="font-weight:600">Spieler &rsaquo;</span></div>'+rows+'</div>'
     + duelCard()
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
@@ -1288,6 +1306,101 @@ function renderTrain(){
     + '</div>';
 }
 
+// ---------------------------------------------------------------------------
+// Spieler-Akte: alles, was ueber einen Spieler in den Daten steht
+// ---------------------------------------------------------------------------
+function playerStats(id){
+  var r = {id:id, games:0, wins:0, legsWon:0, legsLost:0, darts:0, scored:0,
+           best:0, checkout:0, t180:0, tons:0, form:[], solo:0, soloBest:null};
+  for(var i=0;i<state.history.length;i++){
+    var m = state.history[i];
+    var p = null;
+    for(var j=0;j<m.players.length;j++) if(m.players[j].id===id) p = m.players[j];
+    if(!p) continue;
+
+    r.darts += p.darts||0; r.scored += p.scored||0;
+    if((p.best||0) > r.best) r.best = p.best||0;
+    if((p.checkout||0) > r.checkout) r.checkout = p.checkout||0;
+    r.t180 += p.oneEighties||0; r.tons += p.tons||0;
+
+    if(m.players.length<2){ r.solo++; continue; }        // allein gespielt zaehlt separat
+    r.games++;
+    r.legsWon += p.legsWon||0;
+    for(var k=0;k<m.players.length;k++) if(m.players[k].id!==id) r.legsLost += m.players[k].legsWon||0;
+    if(m.winnerId===id) r.wins++;
+    if(r.form.length<10) r.form.push(m.winnerId===id);
+  }
+  r.avg = r.darts ? +((r.scored/r.darts*3).toFixed(1)) : 0;
+  r.quote = r.games ? Math.round(r.wins/r.games*100) : 0;
+  return r;
+}
+
+function renderPlayer(){
+  var p = rosterOf(playerSel);
+  if(!p){ view="home"; return renderHome(); }
+  var s = playerStats(p.id);
+  var me = p.id===meId();
+
+  function row(label, val, sub){
+    return '<div class="srow"><span class="sl">'+label+'</span>'
+      + '<span class="sv">'+val+(sub?'<small> '+sub+'</small>':'')+'</span></div>';
+  }
+  var form = s.form.length
+    ? '<div class="dots" style="margin-top:0">'
+      + s.form.map(function(w){ return '<span class="dot2 '+(w?"a":"b")+'"></span>'; }).join("")
+      + '<span class="dotsl">links = neu</span></div>'
+    : '<div class="hint" style="text-align:left;margin-top:6px">Noch keine Spiele.</div>';
+
+  var duels = allDuels().filter(function(d){ return d.a===p.id || d.b===p.id; }).map(function(d){
+    var other = d.a===p.id ? d.b : d.a;
+    var mine  = d.a===p.id ? d.winsA : d.winsB;
+    var his   = d.a===p.id ? d.winsB : d.winsA;
+    var lead  = mine===his ? "" : (mine>his ? " la" : " behind");
+    return '<div class="duel'+lead+'" data-act="h2hopen" data-a="'+p.id+'" data-b="'+other+'">'
+      + '<span class="dn dna">gegen '+esc(nameOf(other))+'</span>'
+      + '<span class="ds">'+mine+'<i>:</i>'+his+'</span>'
+      + '<span class="dn dnb" style="flex:0"> </span></div>';
+  }).join("");
+
+  var recs = [];
+  var bs = bestSolo(p.id, state.settings.gameType);
+  if(bs) recs.push(row(state.settings.gameType+" allein", bs.darts, "Darts"));
+  var bd = bestPractice(p.id, "double");
+  if(bd) recs.push(row("Doppel-Training", bd.score, "von 21"));
+  var ba = bestPractice(p.id, "around");
+  if(ba) recs.push(row("Around the Clock", ba.score, "von 21"));
+
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<div class="phead">'
+    +   '<div class="pname">'+(me?'<span class="star">&#9733;</span> ':'')+esc(p.name)
+    +     (p.guest?'<span class="badge">Gast</span>':'')+'</div>'
+    +   '<div class="pwins">'+totalWins(p.id)+'<small>Wins</small></div>'
+    + '</div>'
+    + '<div class="card">'
+    +   row("Spiele", s.games, s.games ? '&middot; '+s.quote+' % gewonnen' : '')
+    +   row("&#8960; 3 Darts", s.avg || '&mdash;')
+    +   row("Beste Aufnahme", s.best || '&mdash;')
+    +   row("Höchstes Finish", s.checkout || '&mdash;')
+    +   (s.t180 ? row("180er", s.t180) : '')
+    +   (s.legsWon+s.legsLost ? row("Legs", s.legsWon+' : '+s.legsLost) : '')
+    + '</div>'
+    + '<label class="lbl" style="margin-top:16px">Form</label>' + form
+    + (duels ? '<label class="lbl" style="margin-top:16px">Duelle</label>'
+             + '<div class="card">'+duels+'</div>' : '')
+    + (recs.length ? '<label class="lbl" style="margin-top:16px">Rekorde</label>'
+             + '<div class="card">'+recs.join("")+'</div>' : '')
+    + '<label class="lbl" style="margin-top:18px">Spieler</label>'
+    + '<div class="stack">'
+    +   '<button class="btn" data-act="setme" data-id="'+p.id+'">'
+    +     (me ? '&#9733; Das bin ich &middot; abwählen' : '&#9734; Das bin ich') + '</button>'
+    +   '<div class="row">'
+    +     '<button class="btn" data-act="rename" data-id="'+p.id+'" style="flex:1">Umbenennen</button>'
+    +     '<button class="btn danger" data-act="del" data-id="'+p.id+'" style="flex:1">Löschen</button>'
+    +   '</div>'
+    + '</div>';
+}
+
 function render(){
   if(view!=="game" && view!=="leg" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Legs an
   var el = document.getElementById("app");
@@ -1299,6 +1412,7 @@ function render(){
   else if(view==="h2h") html = renderH2H();
   else if(view==="settings") html = renderSettings();
   else if(view==="solo") html = renderSolo();
+  else if(view==="player") html = renderPlayer();
   else if(view==="train" && state.train) html = renderTrain();
   else if(view==="setup") html = renderSetup();
   else { view="home"; html = renderHome(); }
@@ -1541,8 +1655,11 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="del"){
     var id2=t.getAttribute("data-id"); var p2=state.roster.find(function(x){return x.id===id2;});
-    if(confirm("„"+(p2?p2.name:"")+"“ löschen?")){
-      state.roster=state.roster.filter(function(x){return x.id!==id2;}); save(); render();
+    if(confirm("„"+(p2?p2.name:"")+"“ löschen? Gespielte Partien bleiben im Verlauf.")){
+      state.roster=state.roster.filter(function(x){return x.id!==id2;});
+      if(playerSel===id2){ playerSel=null; view="home"; }
+      if(state.settings.meId===id2) state.settings.meId=null;
+      h2hAuto=true; save(); render();
     } return;
   }
   if(act==="win"){ bumpWins(t.getAttribute("data-id"), parseInt(t.getAttribute("data-d"),10)); render(); return; }
@@ -1582,6 +1699,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 
   // Allein üben
   if(act==="solowho"){ soloWho=t.getAttribute("data-id"); render(); return; }
+  if(act==="openplayer"){ playerSel=t.getAttribute("data-id"); view="player"; render(); return; }
   if(act==="solox01"){ startMatch([soloWho], {mode:"solo"}); render(); return; }
   if(act==="train_double"){ startTraining("double", soloWho); render(); return; }
   if(act==="train_around"){ startTraining("around", soloWho); render(); return; }
@@ -1702,6 +1820,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,
   finishTraining:finishTraining, bestPractice:bestPractice, bestSolo:bestSolo,
   trainTarget:trainTarget, getTrain:function(){return state.train;},
+  playerStats:playerStats, setPlayerSel:function(x){playerSel=x;},
   getPractice:function(){return state.practice;}, setSoloWho:function(x){soloWho=x;},
   totalWins:totalWins, historyWins:historyWins, migrate:migrate, upgradeShape:upgradeShape,
   defaultState:defaultState, getState:function(){return state;},
@@ -1711,6 +1830,14 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
     state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
 
 render();
+
+// Offline-Faehigkeit. Der Service Worker laeuft "network first" (siehe sw.js) -
+// er macht die App offline nutzbar, ohne eine alte Version festzunageln.
+if("serviceWorker" in navigator && location.protocol.indexOf("http")===0){
+  window.addEventListener("load", function(){
+    navigator.serviceWorker.register("./sw.js").catch(function(){});
+  });
+}
 </script>
 </body>
 </html>

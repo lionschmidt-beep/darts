@@ -11,17 +11,40 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - [x] 3 **Legs & Best-of** — ohne Legs ist eine Darts-App nicht vollwertig (Bo3/Bo5/Bo7).
 - [x] 4 **Einstellungen-Screen** — Standardmodus, Doppel-In/Out, Legs, TTS, Export/Import, Reset.
 - [x] 5 **Einzelspieler** — Solo-X01 gegen Bestwert + Trainingsmodi (Doppel-Training, Around the Clock).
-- [ ] 6 **Spieler-Statistik** — 3-Dart-Ø, bester Checkout, höchste Aufnahme, 180er, Form letzte 10.
-- [ ] 7 **PWA** — Manifest + Service Worker, offline installierbar auf dem Handy.
+- [x] 6 **Spieler-Statistik** — 3-Dart-Ø, bester Checkout, höchste Aufnahme, 180er, Form letzte 10.
+- [x] 7 **PWA** — Manifest + Service Worker, offline installierbar auf dem Handy.
 - [x] 8 **Logik-Tests** — node-Testrunner gegen `window.DARTS`, ohne npm-Abhängigkeit.
 
 ## Live-bereit — wartet auf dein GO
-- (noch nichts)
+- **Darts 1.2 → 1.8** — Match-Historie, Duell-Bilanz (Lion↔Arne↔Justus), Legs/Best-of,
+  Einstellungen mit Export/Import, Allein-Üben mit Doppel-Training, Spieler-Akte, PWA.
+  — verifiziert: 73/73 Logik-Tests, 20 Mutationen in Rot-Proben (alle gefangen nach
+  Reparatur von 3 blinden Tests), Screenshots auf 390×844, SW+Offline im Browser gemessen.
+  — 🔴 **Autodeploy: JA.** `gh api repos/lionschmidt-beep/darts/pages` meldet
+  `source.branch: main`, `status: built`, `public: true` → **Push = sofort live**
+  auf https://lionschmidt-beep.github.io/darts/
+  — Kommando: `git -C C:\dev\darts push origin main`
 
 ## Für Lion (Entscheidungen / Blocker)
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 19:05 — Iteration 5+6: Spieler-Akte und PWA
+- Was: `playerStats(id)` + Spieler-Akte (Rangliste antippen): Spiele, Quote, Schnitt,
+  beste Aufnahme, höchstes Finish, 180er, Legs für/gegen, Form der letzten zehn, alle
+  Duelle, Trainings-Rekorde, „das bin ich"/umbenennen/löschen.
+  Dazu PWA: `manifest.webmanifest`, `icon.svg`, `sw.js` (**network first**, damit kein
+  alter Stand auf dem Handy festklebt), Registrierung in `index.html`.
+- 🔴 **Rot-Probe deckte ZWEI weitere blinde Tests auf** — dieselbe Ursache wie in
+  Iteration 4: `state.history` ist neueste-zuerst, deshalb trifft „nimm den zuletzt
+  gelesenen Eintrag" zufällig den ältesten. Lag der Rekord im ältesten Spiel, blieb die
+  Mutation unsichtbar. **Regel daraus: bei unshift-Listen muss der Extremwert in der
+  MITTE liegen** — dann sind „erster" und „letzter" beide falsch. Beide Tests neu gebaut.
+- Verifiziert: 73/73 Tests. Im Browser gemessen statt angenommen: SW aktiv
+  (`scope http://127.0.0.1:8777/`), Manifest 200 mit 2 Icons, **Neuladen mit gekapptem
+  Netz lädt die App** und das laufende Spiel ist noch da.
+- Version: 1.8
 
 ### 27.08.2026 18:40 — Iteration 4: Allein üben
 - Was: Solo-Screen (wer übt + drei Karten), Trainings-Engine mit **Doppel-Training**
