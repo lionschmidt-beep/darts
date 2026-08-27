@@ -21,7 +21,7 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **196/196 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
+  — verifiziert: **209/209 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
   den Commit-Messages summiert, alle gefangen; in 6 von 14 Commits musste ein Test geschärft
   werden), Screenshots auf 390×844, SW+Offline und Tap-Größen im Browser gemessen,
   alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
@@ -47,6 +47,36 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   nicht das Finish. Fair wäre „Credit-Darts". Wäre ein eigenes Feature.
 
 ## Iterationen
+
+### 27.08.2026 22:15 — Iteration 19: Kritiker-Runde über v1.9 → v1.20
+- Der Prüfer hat mit **unabhängigen Referenzimplementierungen** gearbeitet (BFS für
+  `checkout`, ein eigenes x01-Modell über 300 zufällige Partien) statt gegen meine eigenen
+  Tests zu prüfen. Rechenkerne, `MATCH_SNAP`, Undo über die Platzvergabe und Reload mitten
+  im Ausspielen kamen **sauber** durch — das ist ein belastbares Ergebnis.
+- 🔴 **Der Schaden saß an der Peripherie meines jüngsten Features:** `m.platz` hatte einen
+  Schreiber und **null Anzeiger**. `renderWin` las die Reihenfolge nie und sortierte nach
+  `legsWon`, das im Platz-Modus nie erhöht wird → **die Endtabelle stand in Sitzordnung und
+  sah aus wie eine Platzierung**. Wer Platz 2 ausgespielt hatte, war von jemandem mit null
+  geworfenen Darts nicht zu unterscheiden.
+- **Regelfehler:** Doppel-Out galt nur im Tipp-Weg. Rest 20, „20" eingetippt → der
+  Summen-Modus buchte einen Sieg, den derselbe Wurf beim Tippen als Bust verwirft.
+  Für Doppel-**In** fragte die App längst nach; für Doppel-**Out** war derselbe Aufwand
+  nie betrieben worden.
+- Dazu: Bust im Summen-Modus kostete pauschal drei Darts (Schnitte zweier Spieler derselben
+  Partie nicht vergleichbar) · `ttsOn` wurde an vier Stellen nicht nachgezogen · `wakeLock`
+  forderte pro Dart eine Sperre an und gab nur die letzte frei · der Undo-Stapel war **98 %
+  des gespeicherten Stands** (69 KB nach 120 Darts, bei jedem Dart neu serialisiert) ·
+  Fremdfenster-Band blieb sticky · kein Undo auf dem Platz-Screen · `platzSpiel` war eine
+  tote Bedingung ohne Schalter.
+- 🔴 **Den einen Punkt, den der Kritiker nicht messen konnte, habe ich gemessen:** er
+  vermutete, die Legs-Zahl werde bei vier Spielern auf 320 px abgeschnitten. Sie wurde in
+  **allen fünf geprüften Konstellationen** abgeschnitten, auch bei drei Spielern auf 390 px —
+  **mein v1.20-Fix hatte das Problem nur verschoben, nicht gelöst.**
+- Verifiziert: **209/209 Tests** (196 → 209), 15 Mutationen. **Vier rutschten zuerst durch**:
+  der Sieger saß im Test zufällig schon vorn (Sortierung von Sitzordnung nicht
+  unterscheidbar), ein per `display:none` versteckter Knopf zählte als vorhanden, und Layout
+  kann der Runner grundsätzlich nicht messen. Alle vier geschärft.
+- Version: 1.21
 
 ### 27.08.2026 21:35 — Iteration 18: Doku + Randzustände im Browser
 - 🔴 **WIP-Gate meldet 7 offene Repos → Freeze**, keine neuen Features. Diese Iteration ist

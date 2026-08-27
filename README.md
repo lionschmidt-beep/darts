@@ -71,7 +71,7 @@ Single-File-App: `index.html`. Kein Build, kein npm. Dazu `manifest.webmanifest`
 eine alte Fassung auf dem Handy festzunageln).
 
 ```
-node test/run.mjs      # 194 Logik-Tests, ohne Abhängigkeiten
+node test/run.mjs      # 209 Logik-Tests, ohne Abhängigkeiten
 ```
 
 Der Testrunner zieht den `<script>`-Block aus `index.html` und führt ihn gegen einen
