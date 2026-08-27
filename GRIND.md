@@ -21,7 +21,7 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **174/174 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
+  — verifiziert: **182/182 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
   den Commit-Messages summiert, alle gefangen; in 6 von 14 Commits musste ein Test geschärft
   werden), Screenshots auf 390×844, SW+Offline und Tap-Größen im Browser gemessen,
   alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
@@ -34,6 +34,29 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 21:05 — Iteration 16: Zweite Nutzer-Prüfung abgearbeitet
+- Ergebnis der Gegenprüfung: **11 von 12 alten Punkten sitzen**, einer war halb (Tap-Größen
+  im Team-Screen — Zahnrad ✅ 45×44, aber Stift 38 und Mülleimer 36 breit; jetzt beide 46×44,
+  im Browser gemessen). Der Prüfer hat außerdem **einen eigenen Befund zurückgezogen**
+  („kein Bust-Hinweis im Summenmodus") — das war ein Folgefehler seiner eigenen 200-Eingabe.
+- 🔴 **Der schwerste Fund des ganzen Laufs:** Der Zehnerblock verwarf eine zu große Eingabe
+  **still** und setzte das Feld auf die letzte Ziffer zurück — aus `2-0-0` wurde `0`. Kein
+  Rot, keine Meldung. Wer nicht hinsah, buchte eine Null und merkte es zwei Runden später.
+  *„Das ist die einzige Stelle in der ganzen App, wo mir die App was wegnimmt und es mir
+  nicht sagt."* → jetzt wird die Ziffer verworfen, nicht die Eingabe, mit Hinweis darunter.
+- 🔴 **Fehler in meinem eigenen Farb-Fix aus 1.15:** auf der Startseite trug die linke Zahl
+  immer Grün, unabhängig von der Führung — bei „Lion 0:1 Justus" leuchtete Lions Null.
+  In der Akte war es korrekt, auf der Startseite nicht. **Ein Fix, der nur die Hälfte der
+  Stellen erreicht, ist kein Fix.**
+- Dazu: unmögliche Aufnahmen (179, 178, 176, 175, 173, 172, 169, 166, 163) werden abgewiesen ·
+  „1 Duelle" → „1 Duell" an sieben Stellen · Fehlwurf ist ein Kreuz statt eines
+  Gedankenstrichs („20 5 – = 25" las sich wie eine Rechnung) · der Speicher-Satz wird durch
+  einen Schreibtest beim Start gedeckt statt erst nach dem ersten Wurf · der Setup-Screen
+  warnt **vor** dem Einstellen, dass ein Start das laufende Spiel verwirft.
+- Verifiziert: **182/182 Tests** (174 → 182), 6 Mutationen alle gefangen. Im Browser
+  gemessen: `2-0-0` hält jetzt „20" mit Hinweis; Tap-Ziele im Team 46×46 / 46×44 / 46×44.
+- Version: 1.18
 
 ### 27.08.2026 20:20 — Iteration 14+15: Finish-Rechner und Doku
 - 🔴 **Fund aus dem Vault, nicht aus dem Code:** Der `Darts VERSION-Changelog.md` im
