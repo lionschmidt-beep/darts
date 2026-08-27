@@ -89,6 +89,14 @@
   .pcard .ps{font-size:34px; font-weight:800; line-height:1.05; margin:2px 0;}
   .pcard .pmeta{font-size:11px; color:var(--muted);}
   .pcard .arrow{position:absolute; top:-9px; left:50%; transform:translateX(-50%); font-size:12px;}
+  .pcard .legbadge{position:absolute; top:6px; right:7px; min-width:19px; height:19px; line-height:19px;
+    border-radius:7px; background:var(--card2); border:1px solid var(--line); color:var(--muted);
+    font-size:11px; font-weight:800; padding:0 4px;}
+  .pcard.active .legbadge{color:var(--accent); border-color:rgba(34,197,94,.45);}
+  .legline{font-size:12px; color:var(--muted); text-align:center; margin:-2px 0 9px;}
+  .legline b{color:var(--text);}
+  .rank .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:600; margin-top:2px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 
   .turn{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:12px; margin-bottom:12px;}
   .turn .slots{display:flex; gap:8px; margin-bottom:8px;}
@@ -146,28 +154,93 @@
 // ---------------------------------------------------------------------------
 // Speicher
 // ---------------------------------------------------------------------------
-var KEY = "darts_v1";
-var VER = "1.2";
+var KEY    = "darts_v2";
+var KEY_V1 = "darts_v1";
+var VER    = "1.3";
+
+function defaultSettings(){
+  return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
+           tts:true, keepHistory:true };
+}
 function defaultState(){
   return {
+    v:2,
     roster:[
-      {id:"arne",   name:"Arne",   wins:3, guest:false},
-      {id:"justus", name:"Justus", wins:2, guest:false},
-      {id:"lion",   name:"Lion",   wins:1, guest:false}
+      {id:"arne",   name:"Arne",   winsManual:3, guest:false},
+      {id:"justus", name:"Justus", winsManual:2, guest:false},
+      {id:"lion",   name:"Lion",   winsManual:1, guest:false}
     ],
-    match:null
+    match:null,
+    history:[],
+    settings:defaultSettings()
   };
 }
+function mid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+// v1 -> v2: die von Hand gepflegten Wins ueberleben als Basis-Offset (winsManual).
+// Sie werden NICHT ueberschrieben - gespielte Matches kommen oben drauf.
+function migrate(old){
+  var s = defaultState();
+  if(old && old.roster && old.roster.length){
+    s.roster = old.roster.map(function(p){
+      return {id:p.id, name:p.name, winsManual:(p.wins||0), guest:!!p.guest};
+    });
+  }
+  if(old && old.match && !old.match.finished){          // laufendes Spiel mitnehmen
+    var m = old.match;
+    m.id=mid(); m.ts=Date.now(); m.mode="x01";
+    m.bestOf=1; m.legNo=1; m.startIdx=0; m.doubleIn=false; m.legs=[];
+    m.players = m.players.map(function(p){
+      return {id:p.id, name:p.name, score:p.score, darts:p.darts||0, legsWon:0,
+              scored:0, best:0, tons:0, oneEighties:0, checkout:0,
+              legDarts:p.darts||0, legStart:false};
+    });
+    s.match = m;
+  }
+  return s;
+}
+// Felder nachziehen, die eine aeltere v2-Fassung noch nicht kannte.
+function upgradeShape(s){
+  if(!s.history) s.history=[];
+  if(!s.settings) s.settings=defaultSettings();
+  var d=defaultSettings(); for(var k in d) if(!(k in s.settings)) s.settings[k]=d[k];
+  s.roster.forEach(function(p){
+    if(typeof p.winsManual!=="number") p.winsManual = (typeof p.wins==="number"?p.wins:0);
+    delete p.wins;
+  });
+  if(s.match){
+    var m=s.match;
+    if(typeof m.legNo!=="number") m.legNo=1;
+    if(typeof m.startIdx!=="number") m.startIdx=0;
+    if(typeof m.bestOf!=="number") m.bestOf=1;
+    if(!m.legs) m.legs=[];
+    if(!m.id) m.id=mid();
+    m.players.forEach(function(p){
+      ["legsWon","scored","best","tons","oneEighties","checkout","legDarts"].forEach(function(f){
+        if(typeof p[f]!=="number") p[f]=0; });
+      if(typeof p.legStart!=="boolean") p.legStart=false;
+    });
+  }
+  s.v=2;
+  return s;
+}
 function load(){
-  try{ var s=JSON.parse(localStorage.getItem(KEY)); if(s&&s.roster) return s; }catch(e){}
+  try{
+    var raw = localStorage.getItem(KEY);
+    if(raw){ var s=JSON.parse(raw); if(s&&s.roster) return upgradeShape(s); }
+  }catch(e){}
+  try{
+    var old = JSON.parse(localStorage.getItem(KEY_V1));
+    if(old && old.roster) return migrate(old);
+  }catch(e){}
   return defaultState();
 }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
 
 var state = load();
-var view  = "home";      // home | roster | setup | game | win
+var view  = "home";      // home | roster | setup | game | leg | win | h2h | stats | settings
 var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
-var setupSel = null;     // {selected:Set, gameType, doubleOut}
+var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, bestOf}
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -218,15 +291,42 @@ function checkout(score, dartsLeft, doubleOut){
 // ---------------------------------------------------------------------------
 // Spiel-Logik
 // ---------------------------------------------------------------------------
-function startMatch(playerIds, gameType, doubleOut){
-  var players = playerIds.map(function(id){
-    var r = state.roster.find(function(p){return p.id===id;});
-    return {id:id, name:r?r.name:id, score:gameType, darts:0};
-  });
+function rosterOf(id){ return state.roster.find(function(p){return p.id===id;}); }
+
+// Wins = von Hand gepflegter Grundstand + jedes gewonnene Match aus der Historie.
+function historyWins(id){
+  var n=0; for(var i=0;i<state.history.length;i++) if(state.history[i].winnerId===id) n++;
+  return n;
+}
+function totalWins(id){
+  var r=rosterOf(id);
+  return Math.max(0, (r?(r.winsManual||0):0) + historyWins(id));
+}
+
+function legsNeeded(m){ return Math.floor((m.bestOf||1)/2)+1; }
+
+function freshPlayer(id, gt){
+  var r = rosterOf(id);
+  return {id:id, name:r?r.name:id, score:gt, darts:0, legsWon:0,
+          scored:0, best:0, tons:0, oneEighties:0, checkout:0,
+          legDarts:0, legStart:true};
+}
+
+// opts: {gameType, doubleOut, doubleIn, bestOf, mode}  - fehlendes kommt aus den Einstellungen.
+function startMatch(playerIds, opts){
+  opts = opts || {};
+  var st = state.settings;
+  var gt = opts.gameType || st.gameType;
   state.match = {
-    gameType:gameType, doubleOut:doubleOut, players:players,
-    currentIdx:0, currentTurn:[], turnStartScore:gameType,
-    finished:false, winnerId:null, _undo:[]
+    id:mid(), ts:Date.now(), mode:opts.mode||"x01",
+    gameType:gt,
+    doubleOut: opts.doubleOut!==undefined ? !!opts.doubleOut : !!st.doubleOut,
+    doubleIn:  opts.doubleIn !==undefined ? !!opts.doubleIn  : !!st.doubleIn,
+    bestOf:    opts.bestOf   || st.bestOf || 1,
+    players: playerIds.map(function(id){ return freshPlayer(id, gt); }),
+    currentIdx:0, startIdx:0, legNo:1,
+    currentTurn:[], turnStartScore:gt,
+    legs:[], finished:false, winnerId:null, _undo:[]
   };
   curMult = 1; view = "game"; save();
 }
@@ -235,20 +335,35 @@ function snapshot(){
   var m = state.match;
   m._undo.push(JSON.stringify({
     players:m.players, currentIdx:m.currentIdx, currentTurn:m.currentTurn,
-    turnStartScore:m.turnStartScore, finished:m.finished, winnerId:m.winnerId
+    turnStartScore:m.turnStartScore, finished:m.finished, winnerId:m.winnerId,
+    legNo:m.legNo, startIdx:m.startIdx, legs:m.legs
   }));
-  if(m._undo.length>60) m._undo.shift();
+  if(m._undo.length>80) m._undo.shift();
 }
 function undo(){
   var m = state.match; if(!m || !m._undo.length) return;
   var s = JSON.parse(m._undo.pop());
   m.players=s.players; m.currentIdx=s.currentIdx; m.currentTurn=s.currentTurn;
   m.turnStartScore=s.turnStartScore; m.finished=s.finished; m.winnerId=s.winnerId;
+  m.legNo=s.legNo; m.startIdx=s.startIdx; m.legs=s.legs;
   curMult = 1; view = "game"; save(); render();
 }
 
+// Aufnahme abschliessen: erst die Statistik buchen, dann weiterreichen.
+// Nach einem Bust ist score wieder turnStartScore -> got=0, genau richtig.
+function closeTurn(){
+  var m = state.match, p = m.players[m.currentIdx];
+  var got = m.turnStartScore - p.score;
+  if(got>0){
+    p.scored += got;
+    if(got>p.best) p.best = got;
+    if(got>=100) p.tons++;
+    if(got===180) p.oneEighties++;
+  }
+}
 function endTurn(){
   var m = state.match;
+  closeTurn();
   m.currentTurn = [];
   m.currentIdx = (m.currentIdx+1) % m.players.length;
   m.turnStartScore = m.players[m.currentIdx].score;
@@ -262,19 +377,49 @@ function bust(){
   endTurn();
 }
 
-// Ein Dart. mult in {1,2,3}, num in 1..20 oder 25/50.
+// Leg gewonnen: Zwischenstand oder Matchende. Der Anwurf wechselt jedes Leg.
+function winLeg(p){
+  var m = state.match;
+  p.legsWon++;
+  m.legs.push({no:m.legNo, winnerId:p.id, darts:p.legDarts});
+  if(p.legsWon >= legsNeeded(m)){
+    m.finished = true; m.winnerId = p.id; view = "win";
+    return;
+  }
+  m.legNo++;
+  m.startIdx = (m.startIdx+1) % m.players.length;
+  m.currentIdx = m.startIdx;
+  m.players.forEach(function(q){ q.score=m.gameType; q.legDarts=0; q.legStart=true; });
+  m.currentTurn = []; m.turnStartScore = m.gameType; curMult = 1;
+  view = "leg";
+}
+
+// Ein Dart. mult in {1,2,3}, num in 1..20 oder 0/25/50.
+// Rueckgabe: ok | bust | leg | win | nostart | noop
 function applyDart(mult, num){
   var m = state.match; if(!m || m.finished) return "noop";
   var dv = dartValue(mult, num);
   snapshot();
   var p = m.players[m.currentIdx];
-  m.currentTurn.push({label:dv.label, value:dv.value});
-  p.darts++;
+  m.currentTurn.push({label:dv.label, value:dv.value, isDouble:dv.isDouble});
+  p.darts++; p.legDarts++;
+
+  // Doppel-In: bis zum ersten Doppel zaehlt kein Wurf auf das Konto.
+  if(m.doubleIn && p.legStart && !dv.isDouble){
+    if(m.currentTurn.length>=3) endTurn();
+    save(); render(); return "nostart";
+  }
+  if(m.doubleIn && p.legStart) p.legStart = false;
+
   var ns = p.score - dv.value;
 
-  if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Sieg
-    p.score = 0; m.finished = true; m.winnerId = p.id;
-    view = "win"; save(); render(); return "win";
+  if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Leg ausgemacht
+    var finishFrom = m.turnStartScore;
+    p.score = 0;
+    closeTurn();
+    if(finishFrom > (p.checkout||0)) p.checkout = finishFrom;
+    winLeg(p);
+    save(); render(); return m.finished ? "win" : "leg";
   }
   // Bust: unter 0, oder (Doppel-Out) genau 1, oder 0 ohne Doppel
   if(ns<0 || (m.doubleOut && ns===1) || (ns===0 && m.doubleOut && !dv.isDouble)){
@@ -286,21 +431,37 @@ function applyDart(mult, num){
   save(); render(); return "ok";
 }
 
-function countWin(id){
-  var r = state.roster.find(function(p){return p.id===id;});
-  if(r) r.wins = (r.wins||0)+1;
+// Match abschliessen -> wandert in die Historie, aus der Rangliste und H2H entstehen.
+function finishMatch(){
+  var m = state.match; if(!m) return null;
+  var rec = null;
+  if(state.settings.keepHistory!==false && m.finished){
+    rec = {
+      id:m.id, ts:m.ts, ended:Date.now(), mode:m.mode, gameType:m.gameType,
+      doubleOut:m.doubleOut, doubleIn:m.doubleIn, bestOf:m.bestOf, winnerId:m.winnerId,
+      legs:m.legs.slice(),
+      players:m.players.map(function(p){
+        return {id:p.id, name:p.name, legsWon:p.legsWon, darts:p.darts, scored:p.scored,
+                best:p.best, tons:p.tons, oneEighties:p.oneEighties, checkout:p.checkout,
+                avg: p.darts ? +((p.scored/p.darts*3).toFixed(2)) : 0};
+      })
+    };
+    state.history.unshift(rec);
+    if(state.history.length>500) state.history.length = 500;
+  }
+  state.match = null; save();
+  return rec;
 }
 
-// Wins von Hand aendern: +/- (bumpWins) oder frei setzen (setWins). Nie unter 0.
+// Wins von Hand aendern: der Handeintrag ist ein Offset auf die gespielten Siege.
 function bumpWins(id, delta){
-  var r = state.roster.find(function(p){return p.id===id;});
-  if(!r) return;
-  r.wins = Math.max(0, (r.wins||0) + delta); save();
+  var r = rosterOf(id); if(!r) return;
+  if(totalWins(id)+delta < 0) return;
+  r.winsManual = (r.winsManual||0) + delta; save();
 }
 function setWins(id, val){
-  var r = state.roster.find(function(p){return p.id===id;});
-  if(!r) return;
-  r.wins = Math.max(0, Math.round(val||0)); save();
+  var r = rosterOf(id); if(!r) return;
+  r.winsManual = Math.max(0, Math.round(val||0)) - historyWins(id); save();
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +474,7 @@ function addPlayer(name, guest){
   name = (name||"").trim(); if(!name) return;
   var id = slug(name);
   while(state.roster.some(function(p){return p.id===id;})) id += "x";
-  state.roster.push({id:id, name:name, wins:0, guest:!!guest});
+  state.roster.push({id:id, name:name, winsManual:0, guest:!!guest});
   save();
 }
 
@@ -329,12 +490,13 @@ function h(){ return '<header><span class="logo">&#127919;</span><h1>Darts</h1>'
 function renderHome(){
   var m = state.match;
   var sorted = state.roster.slice().sort(function(a,b){
-    return (b.wins-a.wins) || a.name.localeCompare(b.name); });
+    return (totalWins(b.id)-totalWins(a.id)) || a.name.localeCompare(b.name); });
   var rows = sorted.map(function(p,i){
+    var w = totalWins(p.id);
     return '<div class="rank tap" data-act="nav" data-view="roster">'
-      + '<div class="pos'+(i===0&&p.wins>0?" gold":"")+'">'+(i+1)+'</div>'
+      + '<div class="pos'+(i===0&&w>0?" gold":"")+'">'+(i+1)+'</div>'
       + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
-      + '<div class="wins">'+(p.wins||0)+'<small>Wins</small></div>'
+      + '<div class="wins">'+w+'<small>Wins</small></div>'
       + '<div class="chev">&rsaquo;</div>'
       + '</div>';
   }).join("");
@@ -361,7 +523,7 @@ function renderRoster(){
       + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
       + '<div class="wctl">'
       +   '<button data-act="win" data-id="'+p.id+'" data-d="-1" aria-label="Win abziehen">&minus;</button>'
-      +   '<span class="wv" data-act="winset" data-id="'+p.id+'" title="Antippen zum Eintragen">'+(p.wins||0)+'</span>'
+      +   '<span class="wv" data-act="winset" data-id="'+p.id+'" title="Antippen zum Eintragen">'+totalWins(p.id)+'</span>'
       +   '<button data-act="win" data-id="'+p.id+'" data-d="1" aria-label="Win dazu">+</button>'
       + '</div>'
       + '<button class="btn sm ghost" data-act="rename" data-id="'+p.id+'" style="width:auto;padding:0 11px" aria-label="Umbenennen">&#9998;</button>'
@@ -393,6 +555,8 @@ function renderSetup(){
       + '</div>';
   }).join("");
   function seg(g){ return '<button class="btn'+(setupSel.gameType===g?" on":"")+'" data-act="gt" data-g="'+g+'">'+g+'</button>'; }
+  function bo(n){ return '<button class="btn'+(setupSel.bestOf===n?" on":"")+'" data-act="bo" data-n="'+n+'">'
+    + (n===1?"1 Leg":"Bo"+n) + '</button>'; }
   var nSel = setupSel.selected.size;
   return h()
     + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
@@ -405,20 +569,38 @@ function renderSetup(){
     + '<button class="btn'+(setupSel.doubleOut?" on":"")+'" data-act="do" data-v="1">Doppel-Out</button>'
     + '<button class="btn'+(!setupSel.doubleOut?" on":"")+'" data-act="do" data-v="0">Beliebig</button>'
     + '</div>'
-    + '<button class="btn primary" data-act="start" style="margin-top:20px">Los geht\'s &#127919;</button>'
+    + '<label class="lbl" style="margin-top:14px">Legs &middot; wer zuerst '+legsNeeded({bestOf:setupSel.bestOf})+' gewinnt</label>'
+    + '<div class="seg">'+bo(1)+bo(3)+bo(5)+bo(7)+'</div>'
+    + '<div class="pick'+(setupSel.doubleIn?" on":"")+'" data-act="din" style="margin-top:14px">'
+    +   '<div class="dot"></div><div class="nm">Doppel-In &middot; erst ein Doppel eröffnet</div>'
+    + '</div>'
+    + '<button class="btn primary" data-act="start" style="margin-top:16px">Los geht\'s &#127919;</button>'
     + (nSel<1 ? '<div class="hint">Mindestens einen Spieler wählen.</div>' : '');
+}
+
+// 3-Dart-Schnitt. Die laufende Aufnahme zaehlt live mit, sonst springt die Zahl erst
+// beim Spielerwechsel - das sieht auf dem Board aus wie ein Fehler.
+function avgOf(p){
+  var m = state.match, sc = p.scored||0, d = p.darts||0;
+  if(m && !m.finished && m.players[m.currentIdx]===p) sc += Math.max(0, m.turnStartScore - p.score);
+  return d ? (sc/d*3).toFixed(1) : "0.0";
+}
+function fmtDate(ts){
+  var d=new Date(ts), p2=function(n){return n<10?"0"+n:""+n;};
+  return p2(d.getDate())+"."+p2(d.getMonth()+1)+"."+" "+p2(d.getHours())+":"+p2(d.getMinutes());
 }
 
 function renderGame(){
   var m = state.match;
   var cur = m.players[m.currentIdx];
+  var multi = (m.bestOf||1) > 1;
   var cards = m.players.map(function(p,i){
-    var avg = p.darts ? ((m.gameType-p.score)/p.darts*3).toFixed(1) : "0.0";
     return '<div class="pcard'+(i===m.currentIdx?" active":"")+'">'
       + (i===m.currentIdx?'<span class="arrow">&#9660;</span>':'')
+      + (multi?'<span class="legbadge">'+p.legsWon+'</span>':'')
       + '<div class="pn">'+esc(p.name)+'</div>'
       + '<div class="ps">'+p.score+'</div>'
-      + '<div class="pmeta">&#8960; '+avg+' &middot; '+p.darts+' D</div>'
+      + '<div class="pmeta">&#8960; '+avgOf(p)+' &middot; '+p.darts+' D</div>'
       + '</div>';
   }).join("");
 
@@ -436,6 +618,8 @@ function renderGame(){
   for(var nn=1;nn<=20;nn++) nums += '<button class="btn" data-act="num" data-n="'+nn+'">'+nn+'</button>';
 
   return h()
+    + (multi ? '<div class="legline">Leg '+m.legNo+' &middot; erst bei '+legsNeeded(m)+' Legs ist Schluss'
+        + ' &middot; <b>'+m.players.map(function(p){return esc(p.name)+" "+p.legsWon;}).join(" : ")+'</b></div>' : '')
     + '<div class="board">'+cards+'</div>'
     + '<div class="turn">'
     + '<div class="slots">'+slots+'</div>'
@@ -464,26 +648,56 @@ function renderGame(){
     + '<button class="btn ghost danger sm" data-act="quit" style="width:auto;margin:12px auto 0">Spiel abbrechen</button>';
 }
 
+function renderLeg(){
+  var m = state.match;
+  var last = m.legs[m.legs.length-1];
+  var w = m.players.find(function(p){return p.id===(last&&last.winnerId);});
+  var stand = m.players.map(function(p){
+    return '<div class="rank"><div class="nm">'+esc(p.name)+'</div>'
+      + '<div class="wins">'+p.legsWon+'<small>Legs</small></div></div>';
+  }).join("");
+  return h()
+    + '<div class="win" style="padding:22px 0 6px"><div class="trophy">&#127919;</div>'
+    + '<h2>'+esc(w?w.name:"?")+' holt Leg '+(last?last.no:"")+'</h2>'
+    + '<div class="sub">'+(last?last.darts:0)+' Darts &middot; erst bei '+legsNeeded(m)+' Legs ist Schluss</div></div>'
+    + '<div class="card" style="margin-bottom:14px">'+stand+'</div>'
+    + '<button class="btn primary" data-act="nextleg">Leg '+m.legNo+' starten &#8594;</button>'
+    + '<button class="btn ghost sm" data-act="undo" style="width:auto;margin:10px auto 0">&#8630; Doch nicht &ndash; letzten Dart zurück</button>';
+}
+
 function renderWin(){
   var m = state.match;
   var w = m.players.find(function(p){return p.id===m.winnerId;});
-  var avg = w && w.darts ? ((m.gameType)/w.darts*3).toFixed(1) : "-";
+  var multi = (m.bestOf||1)>1;
+  var rows = m.players.slice().sort(function(a,b){return b.legsWon-a.legsWon;}).map(function(p){
+    var d = [];
+    if(p.checkout) d.push("Finish "+p.checkout);
+    if(p.best) d.push("Beste "+p.best);
+    if(p.oneEighties) d.push(p.oneEighties+"&times;180");
+    return '<div class="rank"><div class="nm">'+esc(p.name)
+      + '<div class="sublbl">&#8960; '+(p.darts?(p.scored/p.darts*3).toFixed(1):"0.0")
+      + ' &middot; '+p.darts+' Darts'+(d.length?' &middot; '+d.join(" &middot; "):'')+'</div></div>'
+      + '<div class="wins">'+(multi?p.legsWon:(p.id===m.winnerId?1:0))+'<small>Legs</small></div></div>';
+  }).join("");
   return h()
     + '<div class="win"><div class="trophy">&#127942;</div>'
     + '<h2>'+esc(w?w.name:"?")+' gewinnt!</h2>'
-    + '<div class="sub">'+m.gameType+' &middot; '+(w?w.darts:0)+' Darts &middot; &#8960; '+avg+'</div></div>'
+    + '<div class="sub">'+m.gameType+(multi?' &middot; Best of '+m.bestOf:'')
+      + ' &middot; '+(m.doubleOut?'Doppel-Out':'beliebiger Ausgang')+'</div></div>'
+    + '<div class="card" style="margin-bottom:14px">'+rows+'</div>'
     + '<div class="stack">'
-    + '<button class="btn primary" data-act="winagain">Sieg zählen &middot; nochmal</button>'
-    + '<button class="btn" data-act="winhome">Sieg zählen &middot; zur Rangliste</button>'
-    + '<button class="btn ghost" data-act="undo">&#8630; Doch nicht – letzten Dart zurück</button>'
+    + '<button class="btn primary" data-act="winagain">Speichern &middot; nochmal</button>'
+    + '<button class="btn" data-act="winhome">Speichern &middot; zur Rangliste</button>'
+    + '<button class="btn ghost" data-act="undo">&#8630; Doch nicht &ndash; letzten Dart zurück</button>'
     + '</div>';
 }
 
 function render(){
-  if(view!=="game" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro nur im Spiel
+  if(view!=="game" && view!=="leg" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Legs an
   var el = document.getElementById("app");
   var html;
   if(view==="game" && state.match && !state.match.finished) html = renderGame();
+  else if(view==="leg" && state.match && !state.match.finished) html = renderLeg();
   else if(view==="win" && state.match && state.match.finished) html = renderWin();
   else if(view==="roster") html = renderRoster();
   else if(view==="setup") html = renderSetup();
@@ -650,7 +864,10 @@ function applySpokenResult(p, rawTxt){
   var m=state.match; if(!m || m.finished) return;
   if(p.cmd && p.throws.length===0){
     if(p.cmd==="undo"){ undo(); updateVoiceStatus("&#8617;&#65039; letzter Wurf zurück"); say("Zurück"); return; }
-    if(p.cmd==="skip"){ snapshot(); endTurn(); save(); render(); updateVoiceStatus("&#8594; nächster Spieler"); say("Nächster"); return; }
+    if(p.cmd==="skip"){
+      if(view==="leg"){ view="game"; render(); updateVoiceStatus("&#8594; Leg "+m.legNo); say("Leg "+m.legNo); return; }
+      snapshot(); endTurn(); save(); render(); updateVoiceStatus("&#8594; nächster Spieler"); say("Nächster"); return;
+    }
     if(p.cmd==="stop"){ stopVoice(); render(); return; }
   }
   if(p.throws.length===0){
@@ -671,12 +888,23 @@ function applySpokenResult(p, rawTxt){
     if(r==="noop") break;
     applied.push(th);
     if(r==="win"){ event="win"; break; }
+    if(r==="leg"){ event="leg"; break; }
     if(r==="bust"){ event="bust"; break; }
+    if(r==="nostart"){ event="nostart"; break; }
     if(state.match && state.match.currentIdx!==idxBefore){ event="full"; break; }
   }
   var labels = applied.map(function(a){return a.label;}).join(" ");
   var spoken = applied.map(function(a){return a.say;}).join(", ");
   if(event==="win"){ say("Spiel! "+cur.name+" gewinnt."); return; }
+  if(event==="leg"){
+    var lw = m.legs[m.legs.length-1];
+    updateVoiceStatus('&#127919; Leg an <b>'+esc(cur.name)+'</b> ('+(lw?lw.darts:0)+' Darts) &middot; sag „weiter“');
+    say("Leg für "+cur.name+". Sag weiter für das nächste Leg."); return;
+  }
+  if(event==="nostart"){
+    updateVoiceStatus('&#9888;&#65039; Doppel-In: '+esc(cur.name)+' ist noch nicht drin &ndash; erst ein Doppel zählt.');
+    say("Noch kein Doppel."); return;
+  }
   if(event==="bust"){
     updateVoiceStatus('&#128165; '+esc(cur.name)+': '+esc(labels)+' – überworfen, zurück auf <b>'+cur.score+'</b>');
     say(spoken+". Überworfen. Zurück auf "+cur.score); return;
@@ -715,12 +943,14 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="win"){ bumpWins(t.getAttribute("data-id"), parseInt(t.getAttribute("data-d"),10)); render(); return; }
   if(act==="winset"){
     var wid=t.getAttribute("data-id"); var wp=state.roster.find(function(x){return x.id===wid;});
-    var wv=prompt("Wins für "+(wp?wp.name:"")+":", wp?String(wp.wins||0):"0");
+    var wv=prompt("Wins für "+(wp?wp.name:"")+":", wp?String(totalWins(wid)):"0");
     if(wv!==null){ var n=parseInt(wv,10); if(!isNaN(n)){ setWins(wid, n); render(); } }
     return;
   }
   if(act==="resetwins"){
-    if(confirm("Alle Wins auf 0 setzen?")){ state.roster.forEach(function(p){p.wins=0;}); save(); render(); } return;
+    if(confirm("Alle Wins auf 0 setzen? Gespielte Partien bleiben in der Historie.")){
+      state.roster.forEach(function(p){ p.winsManual = -historyWins(p.id); }); save(); render();
+    } return;
   }
 
   // Setup
@@ -729,11 +959,16 @@ document.getElementById("app").addEventListener("click", function(ev){
     render(); return; }
   if(act==="gt"){ setupSel.gameType=parseInt(t.getAttribute("data-g"),10); render(); return; }
   if(act==="do"){ setupSel.doubleOut = t.getAttribute("data-v")==="1"; render(); return; }
+  if(act==="bo"){ setupSel.bestOf = parseInt(t.getAttribute("data-n"),10); render(); return; }
+  if(act==="din"){ setupSel.doubleIn = !setupSel.doubleIn; render(); return; }
   if(act==="start"){
     var ids = state.roster.filter(function(p){return setupSel.selected.has(p.id);}).map(function(p){return p.id;});
     if(ids.length<1){ return; }
-    startMatch(ids, setupSel.gameType, setupSel.doubleOut); render(); return;
+    startMatch(ids, {gameType:setupSel.gameType, doubleOut:setupSel.doubleOut,
+                     doubleIn:setupSel.doubleIn, bestOf:setupSel.bestOf});
+    render(); return;
   }
+  if(act==="nextleg"){ view="game"; render(); return; }
 
   // Spiel
   if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
@@ -748,12 +983,14 @@ document.getElementById("app").addEventListener("click", function(ev){
 
   // Win
   if(act==="winagain"){
-    countWin(state.match.winnerId);
-    var ids2=state.match.players.map(function(p){return p.id;});
-    startMatch(ids2, state.match.gameType, state.match.doubleOut); render(); return;
+    var m0=state.match;
+    var ids2=m0.players.map(function(p){return p.id;});
+    var o={gameType:m0.gameType, doubleOut:m0.doubleOut, doubleIn:m0.doubleIn, bestOf:m0.bestOf, mode:m0.mode};
+    finishMatch();
+    startMatch(ids2, o); render(); return;
   }
   if(act==="winhome"){
-    countWin(state.match.winnerId); state.match=null; view="home"; save(); render(); return;
+    finishMatch(); view="home"; render(); return;
   }
 });
 
@@ -762,6 +999,11 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   parseSpeech:parseSpeech, applySpokenResult:applySpokenResult,
   bumpWins:bumpWins, setWins:setWins, getRoster:function(){return state.roster;},
   render:render, getMatch:function(){return state.match;},
+  finishMatch:finishMatch, undo:undo, endTurn:endTurn, legsNeeded:legsNeeded,
+  totalWins:totalWins, historyWins:historyWins, migrate:migrate, upgradeShape:upgradeShape,
+  defaultState:defaultState, getState:function(){return state;},
+  setState:function(s2){ state=s2; }, setView:function(v){ view=v; }, getView:function(){return view;},
+  getHistory:function(){return state.history;}, getSettings:function(){return state.settings;},
   setScore:function(i,s){ state.match.players[i].score=s;
     state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
 
