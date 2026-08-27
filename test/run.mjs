@@ -2837,6 +2837,30 @@ t("Ein Dart ist kein 'Darts'", () => {
   ok(ctx.app.innerHTML.indexOf("1 Dart<") >= 0 || ctx.app.innerHTML.indexOf("1 Dart ") >= 0, "im Singular");
 });
 
+// ================================================================ Layout-Regeln
+// Der Testrunner kann kein Layout messen - diese Regeln halten fest, was im
+// Browser gemessen wurde: ohne min-width:0 schiebt ein langer Spielername das
+// ganze Board aus dem Bildschirm (390 Viewport, 417 Inhalt).
+t("Die Spielerkarten koennen schrumpfen", () => {
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const pcard = css.match(/\.pcard\{([^}]*)\}/);
+  ok(pcard, ".pcard-Regel gefunden");
+  ok(/min-width:\s*0/.test(pcard[1]),
+     "ohne min-width:0 schrumpft ein Flex-Kind nicht unter seinen Inhalt: " + pcard[1]);
+  const pn = css.match(/\.pcard \.pn\{([^}]*)\}/);
+  ok(pn && /text-overflow:\s*ellipsis/.test(pn[1]), "und der Name wird gekuerzt");
+});
+
+t("Lange Namen brechen die Textzeilen nicht auf", () => {
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  ["\.legline", "\.lastturn"].forEach(sel => {
+    const r = css.match(new RegExp(sel + "\{([^}]*)\}"));
+    ok(r, sel + " gefunden");
+    ok(/overflow-wrap:\s*anywhere/.test(r[1]),
+       sel + " braucht einen Umbruch fuer lange Namen: " + r[1]);
+  });
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");

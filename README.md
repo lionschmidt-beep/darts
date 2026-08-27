@@ -21,7 +21,7 @@ passiert ist — inklusive „💥 überworfen, zurück auf 40", damit ein Bust 
 „nichts passiert" aussieht.
 
 **Finish-Vorschlag ab Rest ≤ 170** — und zwar der, den man auch wirft: der Rechner
-bevorzugt D20/D16/D8/D4, weil die sich beim Danebenwerfen sauber halbieren, und schlägt
+bevorzugt D16 vor D20 (32→16→8→4→2 hält fünf Halbierungsstufen, 40→20→10→5 nur drei), und schlägt
 nie einen Doppelring als Stellwurf vor. Bei 60 steht dort `20 D20`, nicht `T18 D3`.
 
 **Duelle** — Jedes beendete Spiel wird gespeichert; daraus entsteht der Direktvergleich:
