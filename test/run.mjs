@@ -363,6 +363,173 @@ t("Rangliste zeigt die Summe aus Hand und Historie", () => {
   ok(app.innerHTML.indexOf("Arne") < app.innerHTML.indexOf("Lion"), "Arne (3) vor Lion (2)");
 });
 
+// ================================================================ Direktvergleich
+// Ein komplettes Match in einer Zeile: winIdx gewinnt alle noetigen Legs.
+function playMatch(D, ids, winIdx, opts) {
+  opts = opts || { gameType: 501, doubleOut: true, bestOf: 1 };
+  D.startMatch(ids, opts);
+  const need = D.legsNeeded({ bestOf: opts.bestOf || 1 });
+  for (let l = 0; l < need; l++) {
+    const m = D.getMatch();
+    if (m.currentIdx !== winIdx) {                 // Anwurf beim Falschen: durchreichen
+      D.endTurn();
+    }
+    D.setScore(winIdx, 40);
+    D.applyDart(2, 20);
+  }
+  return D.finishMatch();
+}
+
+t("h2h zaehlt nur Duelle zu zweit", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 1);
+  playMatch(D, ["lion", "arne", "justus"], 0);     // Runde zu dritt
+  const r = D.h2h("lion", "arne");
+  eq(r.n, 3, "drei echte Duelle");
+  eq(r.winsA, 2); eq(r.winsB, 1);
+  eq(r.multiN, 1, "die Dreierrunde separat");
+  eq(r.multiA, 1);
+  eq(r.games.length, 3);
+});
+
+t("h2h ist seitenrichtig - Reihenfolge der Argumente zaehlt", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  eq(D.h2h("lion", "arne").winsA, 1);
+  eq(D.h2h("arne", "lion").winsA, 0, "aus Arnes Sicht steht es 0:1");
+  eq(D.h2h("arne", "lion").winsB, 1);
+});
+
+t("h2h: fremdes Duell faerbt nicht ab", () => {
+  const { D } = boot();
+  playMatch(D, ["justus", "arne"], 0);
+  const r = D.h2h("lion", "arne");
+  eq(r.n, 0, "Lion hat gegen Arne noch nichts gespielt");
+  eq(r.winsA, 0); eq(r.winsB, 0);
+});
+
+t("h2h: Legs und Schnitt kommen aus den echten Matches", () => {
+  const { D } = boot();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setScore(0, 40); D.applyDart(2, 20);          // Leg 1 Lion
+  D.endTurn();                                     // Arne wirft an -> durchreichen
+  D.setScore(0, 40); D.applyDart(2, 20);          // Leg 2 Lion -> Match
+  D.finishMatch();
+  const r = D.h2h("lion", "arne");
+  eq(r.legsA, 2); eq(r.legsB, 0);
+  ok(r.avgA > 0, "Schnitt berechnet");
+  eq(r.dartsA, 2, "zwei Darts geworfen");
+});
+
+t("Siegesserie wird erkannt", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 1);              // Arne
+  playMatch(D, ["lion", "arne"], 0);              // Lion
+  playMatch(D, ["lion", "arne"], 0);              // Lion
+  const r = D.h2h("lion", "arne");
+  eq(r.streak.id, "lion");
+  eq(r.streak.n, 2, "die letzten zwei");
+});
+
+t("allDuels listet jede Paarung einmal, neueste zuerst", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["justus", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 1);
+  const d = D.allDuels();
+  eq(d.length, 2, "zwei Paarungen");
+  const la = d.find(x => (x.a === "lion" || x.b === "lion") && (x.a === "arne" || x.b === "arne"));
+  eq(la.n, 2, "Lion/Arne zweimal gespielt");
+  eq(d[0], la, "die zuletzt gespielte Paarung steht oben");
+});
+
+t("Duell-Bilanz steht im laufenden Spiel im Kopf", () => {
+  const { D, app } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.render();
+  ok(app.innerHTML.includes("Duell"), "Duell-Zeile sichtbar");
+  ok(/Duell <b>1:0<\/b>/.test(app.innerHTML), "Stand 1:0 im Kopf");
+});
+
+t("Bei drei Spielern steht kein Duellstand im Kopf", () => {
+  const { D, app } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, bestOf: 1 });
+  D.render();
+  ok(!app.innerHTML.includes("Duell"), "waere irrefuehrend");
+});
+
+t("H2H-Ansicht rendert mit und ohne Historie", () => {
+  const { D, app } = boot();
+  D.setView("h2h"); D.render();
+  ok(app.innerHTML.includes("Noch kein Duell"), "leerer Zustand ist beschriftet");
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 0);
+  D.setView("h2h"); D.render();
+  ok(app.innerHTML.includes("Duelle"), "Duell-Zahl steht da");
+  ok(app.innerHTML.includes("Die letzten Duelle"), "Spieleliste");
+});
+
+t("Startseite zeigt die Duell-Karte erst, wenn es Duelle gibt", () => {
+  const { D, app } = boot();
+  D.setView("home"); D.render();
+  ok(!app.innerHTML.includes("DUELLE"), "vorher keine leere Karte");
+  playMatch(D, ["lion", "arne"], 0);
+  D.setView("home"); D.render();
+  ok(app.innerHTML.includes("DUELLE"), "danach schon");
+});
+
+// ================================================================ Ich-Marker
+t("Ich stehe im Duell immer links, egal wie der Gegner heisst", () => {
+  const { D } = boot();
+  eq(D.meId(), "lion", "Standard-Marker");
+  playMatch(D, ["arne", "lion"], 1);              // Arne war Spieler 0
+  playMatch(D, ["justus", "lion"], 1);
+  const d = D.allDuels();
+  d.forEach(x => eq(x.a, "lion", "Lion steht links in " + x.a + "/" + x.b));
+});
+
+t("Ohne Ich-Marker entscheidet die alphabetische Reihenfolge", () => {
+  const { D } = boot();
+  const st = D.getState();
+  st.settings.meId = null;
+  playMatch(D, ["lion", "arne"], 0);
+  eq(D.allDuels()[0].a, "arne", "arne < lion");
+});
+
+t("Geloeschter Ich-Spieler faellt sauber zurueck", () => {
+  const { D } = boot();
+  const st = D.getState();
+  st.settings.meId = "gibtsnicht";
+  eq(D.meId(), null, "kein Marker statt Absturz");
+  playMatch(D, ["lion", "arne"], 0);
+  eq(D.allDuels().length, 1, "Duelle funktionieren trotzdem");
+});
+
+t("orderPair dreht nur, wenn ich hinten stehe", () => {
+  const { D } = boot();
+  eq(D.orderPair("arne", "lion"), ["lion", "arne"]);
+  eq(D.orderPair("lion", "arne"), ["lion", "arne"], "bleibt");
+  eq(D.orderPair("arne", "justus"), ["arne", "justus"], "ohne mich unveraendert");
+});
+
+t("Ergebnisliste zeigt den Legs-Stand aus Siegersicht", () => {
+  const { D, app } = boot();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setScore(1, 40); D.endTurn();                 // Lion ist dran -> weiterreichen
+  D.setScore(1, 40); D.applyDart(2, 20);          // Leg 1 Arne
+  D.setScore(1, 40); D.applyDart(2, 20);          // Leg 2 Arne -> Match
+  D.finishMatch();
+  D.setView("h2h"); D.render();
+  ok(app.innerHTML.includes("<b>Arne</b> gewinnt"), "Arne als Sieger");
+  ok(app.innerHTML.includes("2:1") || app.innerHTML.includes("2:0"),
+     "Sieger-Legs zuerst, nie 0:2");
+  ok(!app.innerHTML.includes("Bo3 &middot; 0:2"), "nie der verdrehte Stand");
+});
+
 // ---------------------------------------------------------------- Ausgabe
 console.log("");
 if (fails.length) {

@@ -13,7 +13,7 @@
   :root{
     --bg:#0f1115; --card:#1a1d24; --card2:#20242d; --line:#2a2f3a;
     --text:#e9e7e0; --muted:#8b93a3; --green:#22c55e; --red:#e5484d;
-    --gold:#f5c451; --accent:#22c55e; --shadow:0 6px 20px rgba(0,0,0,.35);
+    --gold:#f5c451; --accent:#22c55e; --accent2:#60a5fa; --shadow:0 6px 20px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; padding:0; background:var(--bg); color:var(--text);
@@ -95,6 +95,8 @@
   .pcard.active .legbadge{color:var(--accent); border-color:rgba(34,197,94,.45);}
   .legline{font-size:12px; color:var(--muted); text-align:center; margin:-2px 0 9px;}
   .legline b{color:var(--text);}
+  .rank .nmtap{cursor:pointer;}
+  .rank .nm .star{color:var(--gold); font-size:14px;}
   .rank .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:600; margin-top:2px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 
@@ -141,6 +143,54 @@
   .win h2{font-size:26px; margin:10px 0 4px;}
   .win .sub{color:var(--muted); margin-bottom:22px;}
 
+  /* Direktvergleich */
+  .cardhead{font-size:13px; color:var(--muted); font-weight:700; margin-bottom:4px;
+    display:flex; justify-content:space-between; align-items:baseline;}
+  .chips{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px;}
+  .chip{border:1px solid var(--line); background:var(--card2); color:var(--muted);
+    border-radius:11px; padding:9px 13px; font-size:14px; font-weight:700; cursor:pointer;}
+  .chip.on.a{background:var(--accent); border-color:transparent; color:#08240f;}
+  .chip.on.b{background:var(--accent2); border-color:transparent; color:#06213f;}
+  .h2hcard{text-align:center; padding:16px 14px 14px;}
+  .h2hnames{display:flex; justify-content:center; align-items:baseline; gap:10px;
+    font-size:14px; font-weight:700; color:var(--muted);}
+  .h2hnames .vs{font-size:11px; opacity:.7;}
+  .h2hbig{display:flex; justify-content:center; align-items:baseline; gap:10px; margin:2px 0 10px;}
+  .h2hbig .a{font-size:46px; font-weight:800; color:var(--accent); line-height:1;}
+  .h2hbig .b{font-size:46px; font-weight:800; color:var(--accent2); line-height:1;}
+  .h2hbig .sep{font-size:26px; color:var(--muted); font-weight:700;}
+  .bar{height:7px; border-radius:5px; background:var(--accent2); overflow:hidden;}
+  .bar i{display:block; height:100%; background:var(--accent);}
+  .h2hsub{font-size:12px; color:var(--muted); margin-top:7px;}
+  .h2hstreak{font-size:12.5px; color:var(--gold); margin-top:8px; font-weight:600;}
+  .cmp{display:flex; align-items:center; padding:9px 2px; border-bottom:1px solid var(--line);}
+  .cmp:last-child{border-bottom:none;}
+  .cmp .ca,.cmp .cb{width:74px; font-size:16px; font-weight:800;}
+  .cmp .cb{text-align:right;}
+  .cmp .cl{flex:1; text-align:center; font-size:12px; color:var(--muted); font-weight:600;}
+  .cmp.la .ca{color:var(--accent);} .cmp.lb .cb{color:var(--accent2);}
+  .dots{display:flex; align-items:center; gap:6px; margin-top:12px; padding:0 3px;}
+  .dot2{width:11px; height:11px; border-radius:50%; background:var(--line); flex:none;}
+  .dot2.a{background:var(--accent);} .dot2.b{background:var(--accent2);}
+  .dotsl{font-size:11px; color:var(--muted); margin-left:5px;}
+  .grow{display:flex; align-items:center; gap:11px; padding:10px 2px; border-bottom:1px solid var(--line);}
+  .grow:last-child{border-bottom:none;}
+  .grow .gdate{font-size:11.5px; color:var(--muted); width:74px; flex:none; font-weight:600;}
+  .grow .gmain{flex:1; font-size:14px; min-width:0;}
+  .grow .gmain b{font-weight:700;}
+  .grow .gsub{display:block; font-size:11px; color:var(--muted); margin-top:1px;}
+  .grow .gdot{width:8px; height:8px; border-radius:50%; flex:none;}
+  .grow .gdot.a{background:var(--accent);} .grow .gdot.b{background:var(--accent2);}
+  .duel{display:flex; align-items:center; gap:8px; padding:11px 2px;
+    border-bottom:1px solid var(--line); cursor:pointer;}
+  .duel:last-child{border-bottom:none;} .duel:active{background:var(--card2);}
+  .duel .dn{flex:1; min-width:0; font-size:15px; font-weight:600;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .duel .dnb{text-align:right;}
+  .duel .ds{font-size:17px; font-weight:800; flex:none; letter-spacing:.5px;}
+  .duel .ds i{font-style:normal; color:var(--muted); margin:0 3px; font-weight:600;}
+  .duel.la .dna{color:var(--accent);} .duel.lb .dnb{color:var(--accent2);}
+
   .fab{margin-top:8px;}
   .hint{font-size:12px; color:var(--muted); text-align:center; margin-top:14px;}
   a{color:var(--accent);}
@@ -156,11 +206,11 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.3";
+var VER    = "1.4";
 
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
-           tts:true, keepHistory:true };
+           tts:true, keepHistory:true, meId:"lion" };
 }
 function defaultState(){
   return {
@@ -241,6 +291,8 @@ var state = load();
 var view  = "home";      // home | roster | setup | game | leg | win | h2h | stats | settings
 var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
 var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, bestOf}
+var h2hSel = null;       // [idA, idB] im Direktvergleich
+var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Blick neu bestimmt
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -292,6 +344,19 @@ function checkout(score, dartsLeft, doubleOut){
 // Spiel-Logik
 // ---------------------------------------------------------------------------
 function rosterOf(id){ return state.roster.find(function(p){return p.id===id;}); }
+
+// "Das bin ich": in Duellen steht dieser Spieler immer links. Ohne den Marker
+// entschiede die alphabetische Reihenfolge, und Lion staende mal links, mal
+// rechts - bei einer Bilanz wie 3:8 muss man dann jedes Mal neu hinsehen.
+function meId(){
+  var id = state.settings && state.settings.meId;
+  return (id && rosterOf(id)) ? id : null;
+}
+// Paar so drehen, dass "ich" vorne steht.
+function orderPair(a, b){
+  var me = meId();
+  return (me && b===me && a!==me) ? [b, a] : [a, b];
+}
 
 // Wins = von Hand gepflegter Grundstand + jedes gewonnene Match aus der Historie.
 function historyWins(id){
@@ -487,6 +552,25 @@ function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
 function h(){ return '<header><span class="logo">&#127919;</span><h1>Darts</h1>'
   + '<span class="ver">v'+VER+'</span></header>'; }
 
+// Die zuletzt gespielten Paarungen direkt auf der Startseite - eine Zeile je
+// Duell, tippen fuehrt in den Direktvergleich.
+function duelCard(){
+  var d = allDuels().slice(0,4);
+  if(!d.length) return '';
+  var rows = d.map(function(x){
+    var lead = x.winsA===x.winsB ? "" : (x.winsA>x.winsB ? " la" : " lb");
+    return '<div class="duel'+lead+'" data-act="h2hopen" data-a="'+x.a+'" data-b="'+x.b+'">'
+      + '<span class="dn dna">'+esc(nameOf(x.a))+'</span>'
+      + '<span class="ds">'+x.winsA+'<i>:</i>'+x.winsB+'</span>'
+      + '<span class="dn dnb">'+esc(nameOf(x.b))+'</span>'
+      + '</div>';
+  }).join("");
+  return '<div class="card" style="margin-bottom:14px">'
+    + '<div class="cardhead"><span>DUELLE</span>'
+    +   '<span data-act="nav" data-view="h2h" style="font-weight:600">alle &rsaquo;</span></div>'
+    + rows + '</div>';
+}
+
 function renderHome(){
   var m = state.match;
   var sorted = state.roster.slice().sort(function(a,b){
@@ -509,18 +593,25 @@ function renderHome(){
     + (resume ? '<div style="margin-bottom:12px">'+resume+'</div>' : '')
     + '<div class="card" style="margin-bottom:14px"><div style="font-size:13px;color:var(--muted);'
       + 'font-weight:700;margin-bottom:4px;display:flex;justify-content:space-between">'
-      + '<span>RANGLISTE</span><span style="font-weight:600">tippen zum Ändern &rsaquo;</span></div>'+rows+'</div>'
+      + '<span>RANGLISTE</span><span style="font-weight:600">ändern &rsaquo;</span></div>'+rows+'</div>'
+    + duelCard()
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
-    + '<button class="btn" data-act="nav" data-view="roster">&#128101;&nbsp; Team &amp; Wins</button>'
+    + '<div class="row">'
+    +   '<button class="btn" data-act="nav" data-view="roster" style="flex:1">&#128101;&nbsp; Team</button>'
+    +   '<button class="btn" data-act="nav" data-view="h2h" style="flex:1">&#9876;&#65039;&nbsp; Duelle</button>'
     + '</div>'
-    + '<div class="hint">Team, Punkte und laufendes Spiel bleiben auf diesem Handy gespeichert.</div>';
+    + '</div>'
+    + '<div class="hint">Alles bleibt auf diesem Handy gespeichert &middot; '+state.history.length+' Spiele im Verlauf.</div>';
 }
 
 function renderRoster(){
   var rows = state.roster.map(function(p){
+    var me = p.id===meId();
     return '<div class="rank">'
-      + '<div class="nm">'+esc(p.name)+(p.guest?'<span class="badge">Gast</span>':'')+'</div>'
+      + '<div class="nm nmtap" data-act="setme" data-id="'+p.id+'">'
+        + (me?'<span class="star">&#9733;</span> ':'')+esc(p.name)
+        + (p.guest?'<span class="badge">Gast</span>':'')+'</div>'
       + '<div class="wctl">'
       +   '<button data-act="win" data-id="'+p.id+'" data-d="-1" aria-label="Win abziehen">&minus;</button>'
       +   '<span class="wv" data-act="winset" data-id="'+p.id+'" title="Antippen zum Eintragen">'+totalWins(p.id)+'</span>'
@@ -532,7 +623,8 @@ function renderRoster(){
   }).join("");
   return h()
     + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
-    + '<label class="lbl">Team &amp; Wins &middot; tippe &minus;/+ oder die Zahl zum Eintragen</label>'
+    + '<label class="lbl">Team &amp; Wins &middot; &minus;/+ oder Zahl antippen &middot; '
+      + 'Name antippen = <b>das bin ich</b> &#9733;</label>'
     + '<div class="card" style="margin-bottom:14px">'+rows+'</div>'
     + '<label class="lbl">Neuer Spieler oder Gast</label>'
     + '<input class="txt" id="newName" placeholder="Name eingeben" autocomplete="off">'
@@ -590,6 +682,18 @@ function fmtDate(ts){
   return p2(d.getDate())+"."+p2(d.getMonth()+1)+"."+" "+p2(d.getHours())+":"+p2(d.getMinutes());
 }
 
+// Eine Zeile ueber dem Board: Leg-Stand und - bei zwei Spielern - die laufende
+// Duellbilanz. Genau die Frage "wie steht es gerade zwischen Arne und mir".
+function gameHead(m, multi){
+  var parts = [];
+  if(multi) parts.push('Leg '+m.legNo+' &middot; erst bei <b>'+legsNeeded(m)+'</b> ist Schluss');
+  if(m.players.length===2){
+    var r = h2h(m.players[0].id, m.players[1].id);
+    if(r.n) parts.push('Duell <b>'+r.winsA+':'+r.winsB+'</b> aus '+r.n);
+  }
+  return parts.length ? '<div class="legline">'+parts.join(' &nbsp;&middot;&nbsp; ')+'</div>' : '';
+}
+
 function renderGame(){
   var m = state.match;
   var cur = m.players[m.currentIdx];
@@ -618,8 +722,7 @@ function renderGame(){
   for(var nn=1;nn<=20;nn++) nums += '<button class="btn" data-act="num" data-n="'+nn+'">'+nn+'</button>';
 
   return h()
-    + (multi ? '<div class="legline">Leg '+m.legNo+' &middot; erst bei '+legsNeeded(m)+' Legs ist Schluss'
-        + ' &middot; <b>'+m.players.map(function(p){return esc(p.name)+" "+p.legsWon;}).join(" : ")+'</b></div>' : '')
+    + gameHead(m, multi)
     + '<div class="board">'+cards+'</div>'
     + '<div class="turn">'
     + '<div class="slots">'+slots+'</div>'
@@ -633,7 +736,7 @@ function renderGame(){
     + '</div>'
     + '<div class="gctl">'
     + '<button class="btn" data-act="undo">&#8630; Zurück</button>'
-    + '<button class="btn" data-act="skip">Aufnahme beenden &#8594;</button>'
+    + '<button class="btn" data-act="skip">Weiter &#8594;</button>'
     + '</div>'
     + '<div class="voice">'
     + '<div class="vhead">'
@@ -692,6 +795,173 @@ function renderWin(){
     + '</div>';
 }
 
+// ---------------------------------------------------------------------------
+// Direktvergleich (H2H): "wie steht es zwischen NUR Arne und mir"
+// Gezaehlt werden ausschliesslich Matches, in denen genau diese zwei gespielt
+// haben. Runden zu dritt werden getrennt ausgewiesen - sonst waere die Bilanz
+// eine andere Zahl, als Lion im Kopf hat.
+// ---------------------------------------------------------------------------
+function h2h(idA, idB){
+  var r = {a:idA, b:idB, n:0, winsA:0, winsB:0, legsA:0, legsB:0,
+           dartsA:0, dartsB:0, scoredA:0, scoredB:0, bestA:0, bestB:0,
+           coA:0, coB:0, t180A:0, t180B:0, games:[], multiN:0, multiA:0, multiB:0};
+  for(var i=0;i<state.history.length;i++){
+    var m = state.history[i];
+    var pa = null, pb = null;
+    for(var j=0;j<m.players.length;j++){
+      if(m.players[j].id===idA) pa = m.players[j];
+      if(m.players[j].id===idB) pb = m.players[j];
+    }
+    if(!pa || !pb) continue;
+    if(m.players.length!==2){                       // Runde zu dritt: separat
+      r.multiN++;
+      if(m.winnerId===idA) r.multiA++;
+      if(m.winnerId===idB) r.multiB++;
+      continue;
+    }
+    r.n++;
+    if(m.winnerId===idA) r.winsA++; else if(m.winnerId===idB) r.winsB++;
+    r.legsA += pa.legsWon||0;  r.legsB += pb.legsWon||0;
+    r.dartsA += pa.darts||0;   r.dartsB += pb.darts||0;
+    r.scoredA += pa.scored||0; r.scoredB += pb.scored||0;
+    r.t180A += pa.oneEighties||0; r.t180B += pb.oneEighties||0;
+    if((pa.best||0) > r.bestA) r.bestA = pa.best||0;
+    if((pb.best||0) > r.bestB) r.bestB = pb.best||0;
+    if((pa.checkout||0) > r.coA) r.coA = pa.checkout||0;
+    if((pb.checkout||0) > r.coB) r.coB = pb.checkout||0;
+    r.games.push({ts:m.ended||m.ts, gameType:m.gameType, bestOf:m.bestOf,
+                  winnerId:m.winnerId, legsA:pa.legsWon||0, legsB:pb.legsWon||0});
+  }
+  r.avgA = r.dartsA ? +((r.scoredA/r.dartsA*3).toFixed(1)) : 0;
+  r.avgB = r.dartsB ? +((r.scoredB/r.dartsB*3).toFixed(1)) : 0;
+  r.games.sort(function(x,y){return y.ts-x.ts;});
+  r.streak = streakOf(r.games);
+  return r;
+}
+// Aktuelle Serie: wer hat die letzten n Duelle in Folge geholt (games neueste zuerst).
+function streakOf(games){
+  if(!games.length) return null;
+  var who = games[0].winnerId, n = 0;
+  for(var i=0;i<games.length;i++){ if(games[i].winnerId!==who) break; n++; }
+  return {id:who, n:n};
+}
+
+// Alle 1-gegen-1-Paarungen, die es wirklich gab - nach Spielzahl sortiert.
+function allDuels(){
+  var map = {};
+  for(var i=0;i<state.history.length;i++){
+    var m = state.history[i];
+    if(m.players.length!==2) continue;
+    var raw = m.players[0].id < m.players[1].id
+      ? [m.players[0].id, m.players[1].id] : [m.players[1].id, m.players[0].id];
+    var key = raw[0]+"|"+raw[1];
+    if(!map[key]){
+      var ord = orderPair(raw[0], raw[1]);
+      map[key] = {a:ord[0], b:ord[1], n:0, winsA:0, winsB:0, last:0};
+    }
+    var d = map[key];
+    d.n++;
+    if(m.winnerId===d.a) d.winsA++; else if(m.winnerId===d.b) d.winsB++;
+    if((m.ended||m.ts) > d.last) d.last = m.ended||m.ts;
+  }
+  var out = [];
+  for(var k in map) out.push(map[k]);
+  out.sort(function(x,y){ return (y.last-x.last) || (y.n-x.n); });
+  return out;
+}
+
+function nameOf(id){ var r = rosterOf(id); return r ? r.name : id; }
+
+function renderH2H(){
+  // Solange Lion nicht selbst gewaehlt hat, zeigt der Screen immer das zuletzt
+  // gespielte Duell - sonst klebt eine alte Vorbelegung fest, obwohl inzwischen
+  // ganz andere Leute gegeneinander gespielt haben.
+  if(h2hAuto || !h2hSel || h2hSel.length!==2){
+    var d0 = allDuels()[0];
+    if(d0) h2hSel = [d0.a, d0.b];
+    else {
+      var ids = state.roster.slice(0,2).map(function(p){return p.id;});
+      h2hSel = ids.length===2 ? orderPair(ids[0], ids[1]) : ids;
+    }
+    h2hAuto = true;
+  }
+  var chips = state.roster.map(function(p){
+    var k = h2hSel.indexOf(p.id);
+    var cls = k===0 ? " on a" : (k===1 ? " on b" : "");
+    return '<button class="chip'+cls+'" data-act="h2hpick" data-id="'+p.id+'">'
+      + esc(p.name)+(p.id===meId()?' &#9733;':'')+'</button>';
+  }).join("");
+
+  if(h2hSel.length<2){
+    return h()
+      + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+      + '<label class="lbl">Zwei Spieler antippen</label>'
+      + '<div class="chips">'+chips+'</div>'
+      + '<div class="hint">Noch '+(2-h2hSel.length)+' auswählen.</div>';
+  }
+
+  var A = h2hSel[0], B = h2hSel[1], r = h2h(A,B);
+  var na = esc(nameOf(A)), nb = esc(nameOf(B));
+  var tot = r.winsA + r.winsB;
+  var pct = tot ? Math.round(r.winsA/tot*100) : 50;
+
+  var dots = r.games.slice(0,7).map(function(g){
+    return '<span class="dot2 '+(g.winnerId===A?"a":(g.winnerId===B?"b":"n"))+'"></span>';
+  }).join("");
+
+  var rows = r.games.slice(0,12).map(function(g){
+    var win = g.winnerId===A ? na : nb;
+    var res = (g.bestOf>1)
+      ? (g.winnerId===A ? g.legsA+':'+g.legsB : g.legsB+':'+g.legsA) : '&mdash;';
+    return '<div class="grow">'
+      + '<div class="gdate">'+fmtDate(g.ts)+'</div>'
+      + '<div class="gmain"><b>'+win+'</b> gewinnt'
+        + '<span class="gsub">'+g.gameType+(g.bestOf>1?' &middot; Bo'+g.bestOf+' &middot; '+res:'')+'</span></div>'
+      + '<div class="gdot '+(g.winnerId===A?"a":"b")+'"></div>'
+      + '</div>';
+  }).join("");
+
+  function line(label, va, vb){
+    var lead = va===vb ? "" : (va>vb ? " la" : " lb");
+    return '<div class="cmp'+lead+'"><span class="ca">'+va+'</span>'
+      + '<span class="cl">'+label+'</span><span class="cb">'+vb+'</span></div>';
+  }
+
+  var streakTxt = "";
+  if(r.streak && r.streak.n>=2) streakTxt = esc(nameOf(r.streak.id))+' hat die letzten '+r.streak.n+' geholt';
+  else if(r.streak) streakTxt = esc(nameOf(r.streak.id))+' hat zuletzt gewonnen';
+
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<div class="chips">'+chips+'</div>'
+    + '<div class="card h2hcard">'
+    +   '<div class="h2hnames"><span>'+na+'</span><span class="vs">vs</span><span>'+nb+'</span></div>'
+    +   '<div class="h2hbig"><span class="a">'+r.winsA+'</span><span class="sep">:</span><span class="b">'+r.winsB+'</span></div>'
+    +   (tot ? '<div class="bar"><i style="width:'+pct+'%"></i></div>'
+             + '<div class="h2hsub">'
+               + (r.winsA===r.winsB ? 'ausgeglichen'
+                  : (r.winsA>r.winsB ? pct+' % für '+na : (100-pct)+' % für '+nb))
+               + ' &middot; '+tot+' Duelle</div>'
+           : '<div class="h2hsub">Noch kein Duell zu zweit gespielt.</div>')
+    +   (streakTxt ? '<div class="h2hstreak">&#128293; '+streakTxt+'</div>' : '')
+    + '</div>'
+    + (r.n ? '<div class="card" style="margin-top:12px">'
+        + line("Legs", r.legsA, r.legsB)
+        + line("&#8960; 3 Darts", r.avgA, r.avgB)
+        + line("Beste Aufnahme", r.bestA, r.bestB)
+        + line("Höchstes Finish", r.coA, r.coB)
+        + (r.t180A||r.t180B ? line("180er", r.t180A, r.t180B) : "")
+        + '</div>' : '')
+    + (dots ? '<div class="dots">'+dots+'<span class="dotsl">letzte Duelle, links = neu</span></div>' : '')
+    + (r.multiN ? '<div class="hint" style="text-align:left;margin-top:12px">'
+        + 'Dazu '+r.multiN+' Runden mit mehr Leuten &middot; '+na+' '+r.multiA+' &middot; '+nb+' '+r.multiB
+        + ' <span class="muted">(zählen nicht ins Duell)</span></div>' : '')
+    + (rows ? '<label class="lbl" style="margin-top:16px">Die letzten Duelle</label>'
+        + '<div class="card">'+rows+'</div>' : '')
+    + '<button class="btn primary" data-act="duelstart" style="margin-top:14px">'
+      + '&#127919;&nbsp; '+na+' gegen '+nb+' spielen</button>';
+}
+
 function render(){
   if(view!=="game" && view!=="leg" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Legs an
   var el = document.getElementById("app");
@@ -700,6 +970,7 @@ function render(){
   else if(view==="leg" && state.match && !state.match.finished) html = renderLeg();
   else if(view==="win" && state.match && state.match.finished) html = renderWin();
   else if(view==="roster") html = renderRoster();
+  else if(view==="h2h") html = renderH2H();
   else if(view==="setup") html = renderSetup();
   else { view="home"; html = renderHome(); }
   el.innerHTML = html;
@@ -941,6 +1212,11 @@ document.getElementById("app").addEventListener("click", function(ev){
     } return;
   }
   if(act==="win"){ bumpWins(t.getAttribute("data-id"), parseInt(t.getAttribute("data-d"),10)); render(); return; }
+  if(act==="setme"){
+    var mid2=t.getAttribute("data-id");
+    state.settings.meId = (state.settings.meId===mid2) ? null : mid2;
+    h2hAuto = true; save(); render(); return;
+  }
   if(act==="winset"){
     var wid=t.getAttribute("data-id"); var wp=state.roster.find(function(x){return x.id===wid;});
     var wv=prompt("Wins für "+(wp?wp.name:"")+":", wp?String(totalWins(wid)):"0");
@@ -969,6 +1245,23 @@ document.getElementById("app").addEventListener("click", function(ev){
     render(); return;
   }
   if(act==="nextleg"){ view="game"; render(); return; }
+
+  // Direktvergleich
+  if(act==="h2hpick"){
+    var hid=t.getAttribute("data-id"); var k=h2hSel.indexOf(hid);
+    if(k>=0) h2hSel.splice(k,1);
+    else { h2hSel.push(hid); if(h2hSel.length>2) h2hSel.shift(); }
+    h2hAuto = false;                      // ab jetzt gilt Lions Wahl
+    render(); return;
+  }
+  if(act==="h2hopen"){
+    h2hSel=[t.getAttribute("data-a"), t.getAttribute("data-b")]; h2hAuto=false;
+    view="h2h"; render(); return;
+  }
+  if(act==="duelstart"){
+    if(h2hSel.length===2){ startMatch([h2hSel[0],h2hSel[1]], {}); render(); }
+    return;
+  }
 
   // Spiel
   if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
@@ -1000,6 +1293,8 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   bumpWins:bumpWins, setWins:setWins, getRoster:function(){return state.roster;},
   render:render, getMatch:function(){return state.match;},
   finishMatch:finishMatch, undo:undo, endTurn:endTurn, legsNeeded:legsNeeded,
+  h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
+  meId:meId, orderPair:orderPair,
   totalWins:totalWins, historyWins:historyWins, migrate:migrate, upgradeShape:upgradeShape,
   defaultState:defaultState, getState:function(){return state;},
   setState:function(s2){ state=s2; }, setView:function(v){ view=v; }, getView:function(){return view;},
