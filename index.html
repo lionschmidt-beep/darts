@@ -277,7 +277,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.13";
+var VER    = "1.14";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -327,7 +327,9 @@ function migrate(old){
 // Felder nachziehen, die eine aeltere v2-Fassung noch nicht kannte.
 function upgradeShape(s){
   if(!Array.isArray(s.history)) s.history=[];
+  s.history = s.history.filter(function(m){ return m && Array.isArray(m.players) && m.players.length; });
   if(!Array.isArray(s.practice)) s.practice=[];
+  s.practice = s.practice.filter(function(r){ return r && r.playerId && r.mode; });
   // Fremde IDs koennten Anfuehrungszeichen enthalten und aus einem data-Attribut
   // ausbrechen. Durch slug() ist das ausgeschlossen.
   s.roster.forEach(function(p){
@@ -374,11 +376,27 @@ function upgradeShape(s){
   s.v=2;
   return s;
 }
+// Laeuft eine Uebung, deren Modus diese Fassung ueberhaupt kennt? TRAIN wird
+// weiter unten belegt, diese Funktion kann aber schon beim Laden gerufen werden.
+function trainBekannt(){
+  return !!(state && state.train && typeof TRAIN === "object" && TRAIN[state.train.mode]);
+}
+var standDefekt = false;      // gespeicherter Stand war nicht lesbar
 function load(){
-  try{
-    var raw = localStorage.getItem(KEY);
-    if(raw){ var s=JSON.parse(raw); if(s&&s.roster) return upgradeShape(s); }
-  }catch(e){}
+  var raw = null;
+  try{ raw = localStorage.getItem(KEY); }catch(e){}
+  if(raw){
+    try{
+      var s=JSON.parse(raw);
+      if(s&&s.roster) return upgradeShape(s);
+      throw new Error("kein Team");
+    }catch(e){
+      // Den Rohtext beiseitelegen, BEVOR der erste Klick ihn ueberschreibt -
+      // sonst ist die einzige Kopie der Daten nach einem Fingertipp weg.
+      standDefekt = true;
+      try{ localStorage.setItem(KEY+"_defekt", raw); }catch(e2){}
+    }
+  }
   try{
     var old = JSON.parse(localStorage.getItem(KEY_V1));
     if(old && old.roster) return migrate(old);
@@ -405,14 +423,16 @@ function save(){
 // Zustand gibt - sonst landet man auf einem Screen ohne Daten.
 function restoreView(){
   var v = state._view;
-  if(v==="train") return state.train ? "train" : "home";
+  if(v==="train") return trainBekannt() ? "train" : "home";
   if(v==="game" || v==="leg") return (state.match && !state.match.finished) ? v : "home";
   if(v==="win")  return (state.match && state.match.finished) ? "win" : "home";
   return "home";
 }
 
 var state = load();
-var view  = restoreView();   // home | roster | setup | game | leg | win | h2h | player | solo | train | settings
+var view  = "home";          // home | roster | setup | game | leg | win | h2h | player | solo | train | settings
+                             // Der gemerkte Bildschirm wird ganz unten gesetzt -
+                             // dort sind TRAIN und die Render-Funktionen belegt.
 var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
 var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, bestOf}
 var h2hSel = null;       // [idA, idB] im Direktvergleich
@@ -791,7 +811,7 @@ function renderHome(){
     resume = '<button class="btn primary fab" data-act="nav" data-view="win">&#127942;&nbsp; Ergebnis eintragen ('
       + esc(w?w.name:"?") + ' hat gewonnen)</button>';
   }
-  var tr0 = state.train;
+  var tr0 = trainBekannt() ? state.train : null;
   if(tr0 && !tr0.done){
     resume += '<button class="btn'+(resume?"":" primary")+'" data-act="resumetrain" style="margin-top:'
       + (resume?"8":"0") + 'px">&#127919;&nbsp; Übung fortsetzen ('
@@ -1363,15 +1383,19 @@ function exportBlob(){
     return true;
   }catch(e){ return false; }
 }
-function exportClipboard(){
+// writeText liefert ein Promise. Frueher wurde sofort "true" gemeldet und die
+// Ablehnung landete als unbehandelter Fehler - der Screen log, die Sicherung
+// existierte nicht.
+function exportClipboard(fertig){
   var data = JSON.stringify(exportPayload());
   try{
     if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(data);
-      return true;
+      navigator.clipboard.writeText(data).then(function(){ fertig(true); },
+                                              function(){ fertig(false); });
+      return;
     }
   }catch(e){}
-  return false;
+  fertig(false);
 }
 // Import: ersetzt den kompletten Stand. Wird nur nach Rueckfrage aufgerufen.
 function importText(txt){
@@ -1380,13 +1404,18 @@ function importText(txt){
     var obj = JSON.parse(txt);
     var st = obj && obj.state ? obj.state : obj;
     if(!st || !Array.isArray(st.roster) || !st.roster.length) return "In der Datei steht kein Team.";
+    // Eintraege ohne Spielerliste bringen jede Auswertung zum Absturz - und der
+    // kaputte Stand laege danach schon im Speicher, also auch nach dem Neustart.
+    if(Array.isArray(st.history))
+      st.history = st.history.filter(function(m){ return m && Array.isArray(m.players) && m.players.length; });
+    if(Array.isArray(st.practice))
+      st.practice = st.practice.filter(function(r){ return r && r.playerId && r.mode; });
     neu = upgradeShape(st);
   }catch(e){
     return "Die Sicherung ist beschädigt und wurde nicht eingespielt.";
   }
   state = neu;
   h2hSel = null; h2hAuto = true; setupSel = null; playerSel = null; soloWho = null;
-  view = restoreView();
   save();
   return null;
 }
@@ -1768,10 +1797,14 @@ function render(){
   else if(view==="settings") html = renderSettings();
   else if(view==="solo") html = renderSolo();
   else if(view==="player") html = renderPlayer();
-  else if(view==="train" && state.train) html = renderTrain();
+  else if(view==="train" && trainBekannt()) html = renderTrain();
   else if(view==="setup") html = renderSetup();
   else { view="home"; html = renderHome(); }
-  el.innerHTML = (fremdGeschrieben
+  el.innerHTML = (standDefekt
+    ? '<div class="alarm">&#9888;&#65039; Der gespeicherte Stand war beschädigt und konnte nicht '
+      + 'geladen werden. Die Rohdaten liegen unter <code>darts_v2_defekt</code>. '
+      + '<span data-act="standok" class="alarmlink">Verstanden &rsaquo;</span></div>'
+    : '') + (fremdGeschrieben
     ? '<div class="alarm">&#9888;&#65039; Ein zweites offenes Fenster hat den Stand verändert. '
       + 'Was du hier weiterspielst, überschreibt es. '
       + '<span data-act="reloadstate" class="alarmlink">Fremden Stand laden &rsaquo;</span></div>'
@@ -2009,6 +2042,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   var t = ev.target.closest("[data-act]"); if(!t) return;
   var act = t.getAttribute("data-act");
 
+  if(act==="standok"){ standDefekt=false; render(); return; }
   if(act==="reloadstate"){
     if(confirm("Stand des anderen Fensters laden? Was hier offen ist, geht verloren.")){
       state = load(); h2hSel=null; h2hAuto=true; setupSel=null;
@@ -2019,7 +2053,8 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="nav"){
     view=t.getAttribute("data-view");
     if(view==="setup") setupSel=null;
-    if(view!=="settings") settingsMsg="";
+    settingsMsg="";                    // auch beim Betreten leeren, sonst taucht
+                                       // eine alte Meldung spaeter als Geist auf
     save(); render(); return;
   }
   if(act==="resume"){ view="game"; save(); render(); return; }
@@ -2122,19 +2157,31 @@ document.getElementById("app").addEventListener("click", function(ev){
     render(); return;
   }
   if(act==="s_copy"){
-    settingsMsg = exportClipboard() ? "In der Zwischenablage – irgendwo einfügen und sichern."
-                                    : "Zwischenablage nicht erlaubt.";
-    render(); return;
+    settingsMsg = "Kopiere …";
+    render();
+    exportClipboard(function(ok){
+      settingsMsg = ok ? "In der Zwischenablage – irgendwo einfügen und sichern."
+                       : "Kopieren wurde abgelehnt – nimm „Als Datei sichern“.";
+      render();
+    });
+    return;
   }
   if(act==="s_import"){
     var fi=document.getElementById("impFile"); if(!fi) return;
     fi.onchange=function(){
-      var f=fi.files&&fi.files[0]; if(!f) return;
+      var f=fi.files&&fi.files[0];
+      fi.value="";                       // sonst feuert dieselbe Datei kein zweites Mal
+      if(!f) return;
       var rd=new FileReader();
       rd.onload=function(){
         if(!confirm("Sicherung einspielen? Der aktuelle Stand wird ersetzt.")) return;
         var err=importText(String(rd.result));
         settingsMsg = err ? err : "Sicherung eingespielt.";
+        view="settings";                 // dort steht die Meldung, dort wurde geklickt
+        render();
+      };
+      rd.onerror=function(){
+        settingsMsg="Die Datei konnte nicht gelesen werden.";
         render();
       };
       rd.readAsText(f);
@@ -2273,6 +2320,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   setScore:function(i,s){ state.match.players[i].score=s;
     state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
 
+view = restoreView();        // jetzt ist alles definiert, was restoreView prueft
 render();
 
 // Ein zweites offenes Fenster (PWA neben Safari-Tab) schreibt denselben

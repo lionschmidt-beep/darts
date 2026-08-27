@@ -14,10 +14,12 @@ if (!m) { console.error("Kein <script>-Block gefunden"); process.exit(1); }
 const code = m[1];
 
 function makeEl() {
-  const el = { innerHTML: "", value: "", _listeners: {} };
+  const el = { innerHTML: "", value: "", _listeners: {}, files: [] };
   el.addEventListener = (t, fn) => { el._listeners[t] = fn; };
   el.setAttribute = () => {};
   el.getAttribute = () => null;
+  el.click = () => {};                    // Dateidialog oeffnet im Test nichts
+  el.remove = () => {};
   return el;
 }
 
@@ -110,8 +112,17 @@ function reboot(ctx) { return boot(Object.fromEntries(ctx.store)); }
 // ---------------------------------------------------------------- Mini-Framework
 let pass = 0, fail = 0;
 const fails = [];
+const offen = [];   // asynchrone Tests - ohne diese Liste zaehlten sie immer als gruen
 function t(name, fn) {
-  try { fn(); pass++; }
+  try {
+    const r = fn();
+    if (r && typeof r.then === "function") {
+      offen.push(r.then(() => { pass++; },
+                        e => { fail++; fails.push(name + " (async) -- " + e.message); }));
+      return;
+    }
+    pass++;
+  }
   catch (e) { fail++; fails.push(name + "\n      " + e.message); }
 }
 function eq(a, b, msg) {
@@ -1930,7 +1941,108 @@ t("Ein fremder Schreibvorgang auf einen anderen Schluessel stoert nicht", () => 
   ok(/zweites offenes Fenster/i.test(ctx.app.innerHTML), "der echte Schluessel dagegen schon");
 });
 
+// ================================================================ Keine weisse Seite
+t("Eine Sicherung mit kaputtem Verlauf macht die App nicht unbrauchbar", () => {
+  const ctx = boot();
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  const kaputt = JSON.stringify({ state: {
+    roster: [{ id: "lion", name: "Lion", winsManual: 0 }],
+    match: null, practice: [],
+    history: [{ id: "x", ts: 1, winnerId: "lion" }],      // players fehlt
+  }});
+  let err = null;
+  try { ctx.D.importText(kaputt); } catch (e) { err = e.message; }
+  eq(err, null, "der Import selbst wirft nicht: " + err);
+  let renderErr = null;
+  try { ctx.D.setView("home"); ctx.D.render(); } catch (e) { renderErr = e.message; }
+  eq(renderErr, null, "und die Startseite laesst sich zeichnen: " + renderErr);
+  ok(ctx.app.innerHTML.length > 50, "es steht etwas auf dem Schirm");
+});
+
+t("Ein unbekannter Trainingsmodus blockiert den Start nicht", () => {
+  const roh = { v: 2, roster: [{ id: "lion", name: "Lion", winsManual: 0 }],
+                match: null, history: [], practice: [],
+                settings: { gameType: 501, doubleOut: true, bestOf: 1, meId: "lion" },
+                train: { mode: "gibtsnichtmehr", playerId: "lion", idx: 2, tries: 0,
+                         hits: 2, darts: 2, results: [], done: false, ts: 1 } };
+  let err = null, ctx = null;
+  try { ctx = boot({ darts_v2: JSON.stringify(roh) }); } catch (e) { err = e.message; }
+  eq(err, null, "die App startet: " + err);
+  ok(ctx && ctx.D, "und ist bedienbar");
+  let rErr = null;
+  try { ctx.D.setView("home"); ctx.D.render(); } catch (e) { rErr = e.message; }
+  eq(rErr, null, "Startseite zeichnet: " + rErr);
+});
+
+t("Ein beschaedigter Stand wird gemeldet, nicht stillschweigend ersetzt", () => {
+  const ctx = boot({ darts_v2: '{"v":2,"roster":[{"id":"lion","name":"Li' });   // abgeschnitten
+  ctx.D.setView("home"); ctx.D.render();
+  ok(/beschädigt|Sicherung|wiederhergestellt/i.test(ctx.app.innerHTML),
+     "der Nutzer muss erfahren, dass sein Stand nicht geladen werden konnte");
+  ok(ctx.store.has("darts_v2_defekt"),
+     "und der Rohtext wird beiseitegelegt, bevor der erste Klick ihn ueberschreibt");
+});
+
+t("Ein sauberer Stand loest keine Beschaedigt-Meldung aus", () => {
+  const ctx = boot();
+  ctx.D.setView("home"); ctx.D.render();
+  ok(!/beschädigt/i.test(ctx.app.innerHTML), "kein Fehlalarm");
+  ok(!ctx.store.has("darts_v2_defekt"), "und nichts beiseitegelegt");
+});
+
+// ================================================================ Rueckmeldung beim Sichern
+t("Der Import meldet den Erfolg dort, wo man ihn ausgeloest hat", () => {
+  const A = boot();
+  playMatch(A.D, ["lion", "arne"], 0);
+  const json = JSON.stringify(A.D.exportPayload());
+  const ctx = boot();
+  ctx.D.setView("settings"); ctx.D.render();
+  ctx.click("s_import");
+  const fi = ctx.els.impFile;
+  fi.files = [{ name: "sicherung.json" }];
+  ok(typeof fi.onchange === "function", "der Dateidialog ist verdrahtet");
+  ctx.win.FileReader = function () {
+    this.readAsText = () => { this.result = json; this.onload && this.onload(); };
+  };
+  fi.onchange();
+  ok(/eingespielt/i.test(ctx.app.innerHTML),
+     "die Erfolgsmeldung steht auf dem Einstellungs-Screen, nicht irgendwo spaeter");
+  eq(ctx.D.getHistory().length, 1, "und der Verlauf ist da");
+});
+
+t("Eine nicht lesbare Datei loest eine Meldung aus, nicht Schweigen", () => {
+  const ctx = boot();
+  ctx.D.setView("settings"); ctx.D.render();
+  ctx.click("s_import");
+  const fi = ctx.els.impFile;
+  fi.files = [{ name: "kaputt.json" }];
+  ctx.win.FileReader = function () {
+    this.readAsText = () => { this.onerror && this.onerror(); };
+  };
+  fi.onchange();
+  // Nur die Meldezeile pruefen - "nicht" steht sonst ueberall im Fliesstext.
+  const meldung = (ctx.app.innerHTML.match(/<div class="okmsg">([^<]*)<\/div>/) || [])[1] || "";
+  ok(/gelesen werden/i.test(meldung),
+     "sonst ist es ununterscheidbar von 'danebengetippt'. Meldezeile war: '" + meldung + "'");
+});
+
+t("Die Zwischenablage meldet keinen Erfolg, den es nicht gab", () => {
+  const ctx = boot();
+  let abgelehnt = false;
+  ctx.win.navigator.clipboard = {
+    writeText: () => { abgelehnt = true; return Promise.reject(new Error("nope")); },
+  };
+  ctx.D.setView("settings"); ctx.D.render();
+  ctx.click("s_copy");
+  return new Promise(r => setTimeout(r, 0)).then(() => {
+    ok(abgelehnt, "es wurde versucht");
+    ok(!/In der Zwischenablage/i.test(ctx.app.innerHTML),
+       "aber nicht als Erfolg gemeldet");
+  });
+});
+
 // ---------------------------------------------------------------- Ausgabe
+await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");
 if (fails.length) {
   console.log("FEHLGESCHLAGEN:");
