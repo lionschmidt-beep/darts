@@ -623,6 +623,154 @@ t("Ausdrueckliche Optionen schlagen die Einstellungen", () => {
   eq(D.getMatch().gameType, 701);
 });
 
+// ================================================================ Allein spielen
+t("Ein Solo-Spiel zaehlt nicht als Sieg", () => {
+  const { D } = boot();
+  eq(D.totalWins("lion"), 1);
+  playMatch(D, ["lion"], 0);                      // allein: man gewinnt gegen niemanden
+  eq(D.getHistory().length, 1, "das Spiel wird trotzdem gespeichert");
+  eq(D.totalWins("lion"), 1, "aber die Rangliste bleibt unberuehrt");
+});
+
+t("Ein echtes Spiel zaehlt weiterhin", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  eq(D.totalWins("lion"), 2);
+});
+
+// ================================================================ Training
+t("Doppel-Training: Treffer schaltet weiter, drei Fehlversuche auch", () => {
+  const { D } = boot();
+  D.startTraining("double", "lion");
+  eq(D.trainTarget().short, "D1");
+  eq(D.trainDart(true), "hit");
+  eq(D.trainTarget().short, "D2", "nach dem Treffer das naechste Ziel");
+  eq(D.getTrain().hits, 1);
+  D.trainDart(false); D.trainDart(false);
+  eq(D.trainTarget().short, "D2", "nach zwei Fehlern noch dasselbe Ziel");
+  D.trainDart(false);
+  eq(D.trainTarget().short, "D3", "nach dem dritten weiter");
+  eq(D.getTrain().hits, 1, "kein Punkt fuer D2");
+  eq(D.getTrain().darts, 4);
+});
+
+t("Training endet nach 21 Zielen und kennt seinen Bestwert", () => {
+  const { D } = boot();
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 20; i++) D.trainDart(true);
+  eq(D.getTrain().done, false, "20 von 21");
+  eq(D.trainDart(true), "done");
+  eq(D.getTrain().hits, 21);
+  const rec = D.finishTraining();
+  eq(rec.score, 21); eq(rec.max, 21); eq(rec.darts, 21); eq(rec.mode, "double");
+  eq(D.getPractice().length, 1);
+  eq(D.bestPractice("lion", "double").score, 21);
+  eq(D.bestPractice("arne", "double"), null, "fremder Bestwert bleibt leer");
+  eq(D.getTrain(), null, "Lauf beendet");
+});
+
+t("Uebungsrunden zaehlen NICHT in Rangliste oder Duell", () => {
+  const { D } = boot();
+  const before = D.totalWins("lion");
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 21; i++) D.trainDart(true);
+  D.finishTraining();
+  eq(D.totalWins("lion"), before, "Rangliste unberuehrt");
+  eq(D.getHistory().length, 0, "nichts in der Match-Historie");
+  eq(D.h2h("lion", "arne").n, 0);
+});
+
+t("Bestwert ist der hoechste Score - egal an welcher Stelle er steht", () => {
+  const { D } = boot();
+  // Der beste Lauf liegt bewusst in der MITTE: liefe bestPractice einfach bis
+  // zum Ende durch, gaebe es den aeltesten zurueck und der Test merkte nichts.
+  const lauf = (treffer) => {
+    D.startTraining("double", "lion");
+    for (let i = 0; i < treffer; i++) D.trainDart(true);
+    for (let i = 0; i < (21 - treffer) * 3; i++) D.trainDart(false);
+    D.finishTraining();
+  };
+  lauf(5);                                   // aeltester
+  lauf(15);                                  // der beste
+  lauf(2);                                   // neuester
+  eq(D.getPractice().length, 3);
+  eq(D.getPractice()[0].score, 2, "neuester steht vorn");
+  eq(D.getPractice()[2].score, 5, "aeltester steht hinten");
+  eq(D.bestPractice("lion", "double").score, 15, "weder der neueste noch der aelteste");
+});
+
+t("Bei gleichem Score gewinnen die wenigeren Darts", () => {
+  const { D } = boot();
+  // Lauf 1: 1 Treffer, danach lauter Fehlversuche -> viele Darts
+  D.startTraining("double", "lion");
+  D.trainDart(true);
+  for (let i = 0; i < 60; i++) D.trainDart(false);
+  D.finishTraining();
+  const teuer = D.bestPractice("lion", "double").darts;
+  // Lauf 2: ebenfalls 1 Treffer, aber ein Fehlversuch weniger
+  D.startTraining("double", "lion");
+  D.trainDart(true);
+  for (let i = 0; i < 59; i++) D.trainDart(false);
+  D.trainDart(false);
+  D.trainUndo();                             // einen Dart wieder wegnehmen
+  D.trainDart(false);
+  D.finishTraining();
+  const b = D.bestPractice("lion", "double");
+  eq(b.score, 1);
+  ok(b.darts <= teuer, "der sparsamere Lauf gewinnt (" + b.darts + " <= " + teuer + ")");
+});
+
+t("Training zurueck: der letzte Dart laesst sich wegnehmen", () => {
+  const { D } = boot();
+  D.startTraining("double", "lion");
+  D.trainDart(true);                                    // D1 getroffen
+  eq(D.getTrain().idx, 1);
+  D.trainUndo();
+  eq(D.getTrain().idx, 0, "wieder auf D1");
+  eq(D.getTrain().hits, 0);
+  eq(D.getTrain().darts, 0);
+  D.trainDart(false);
+  eq(D.getTrain().tries, 1);
+  D.trainUndo();
+  eq(D.getTrain().tries, 0, "Fehlversuch zurueckgenommen");
+});
+
+t("Around the Clock hat eigene Ziele und eigenen Bestwert", () => {
+  const { D } = boot();
+  D.startTraining("around", "lion");
+  eq(D.trainTarget().short, "1");
+  for (let i = 0; i < 21; i++) D.trainDart(true);
+  D.finishTraining();
+  eq(D.bestPractice("lion", "around").score, 21);
+  eq(D.bestPractice("lion", "double"), null, "Modi werden nicht vermischt");
+});
+
+t("Solo-Rekord: wenigste Darts fuer diesen Startwert", () => {
+  const { D } = boot();
+  D.startMatch(["lion"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); D.applyDart(2, 20); D.finishMatch();
+  const r1 = D.bestSolo("lion", 501);
+  eq(r1.darts, 1);
+  eq(D.bestSolo("lion", 301), null, "anderer Startwert, eigener Rekord");
+  eq(D.bestSolo("arne", 501), null, "fremder Rekord bleibt leer");
+});
+
+t("Solo-Screen und Trainings-Screen rendern", () => {
+  const { D, app } = boot();
+  D.setView("solo"); D.render();
+  ok(app.innerHTML.includes("Wer übt?"), "Auswahl da");
+  ok(app.innerHTML.includes("Doppel-Training"), "Modus-Karte");
+  ok(app.innerHTML.includes("Noch kein Rekord"), "leerer Zustand beschriftet");
+  D.startTraining("double", "lion");
+  D.setView("train"); D.render();
+  ok(app.innerHTML.includes("Doppel 1"), "aktuelles Ziel gross");
+  ok(app.innerHTML.includes("Treffer"), "Bedienung");
+  for (let i = 0; i < 21; i++) D.trainDart(true);
+  D.render();
+  ok(app.innerHTML.includes("21 von 21"), "Abschluss");
+  ok(app.innerHTML.includes("Neuer Rekord"), "erster Lauf ist immer Rekord");
+});
+
 // ---------------------------------------------------------------- Ausgabe
 console.log("");
 if (fails.length) {

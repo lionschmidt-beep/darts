@@ -10,7 +10,7 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - [x] 2 **Head-to-Head / Matchup-Ansicht** — "Lion vs Arne 7:3", letzte Spiele, Ø. Der eigentliche Wunsch.
 - [x] 3 **Legs & Best-of** — ohne Legs ist eine Darts-App nicht vollwertig (Bo3/Bo5/Bo7).
 - [x] 4 **Einstellungen-Screen** — Standardmodus, Doppel-In/Out, Legs, TTS, Export/Import, Reset.
-- [ ] 5 **Einzelspieler** — Solo-X01 gegen Bestwert + Trainingsmodi (Doppel-Training, Around the Clock).
+- [x] 5 **Einzelspieler** — Solo-X01 gegen Bestwert + Trainingsmodi (Doppel-Training, Around the Clock).
 - [ ] 6 **Spieler-Statistik** — 3-Dart-Ø, bester Checkout, höchste Aufnahme, 180er, Form letzte 10.
 - [ ] 7 **PWA** — Manifest + Service Worker, offline installierbar auf dem Handy.
 - [x] 8 **Logik-Tests** — node-Testrunner gegen `window.DARTS`, ohne npm-Abhängigkeit.
@@ -22,6 +22,23 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 18:40 — Iteration 4: Allein üben
+- Was: Solo-Screen (wer übt + drei Karten), Trainings-Engine mit **Doppel-Training**
+  (D1→Bull) und **Around the Clock**, Bestwert je Spieler und Modus, Solo-X01-Rekord
+  (wenigste Darts je Startwert).
+- 🔴 Dabei **Bug im Bestand gefunden und behoben**: ein Solo-Spiel zählte als Sieg —
+  man gewinnt gegen niemanden. `historyWins` ignoriert jetzt Matches mit < 2 Spielern.
+  Test war zuerst rot (52/53), dann grün.
+- Trennung: Übungsläufe gehen nach `state.practice`, NICHT in `state.history` — sonst
+  zählte jede Übungsrunde in Rangliste und Duell-Bilanz.
+- 🔴 **Rot-Probe deckte einen blinden Test auf**: „Bestwert = höchster Score" ließ die
+  Mutation `b = r` (nimm irgendeinen) durch, weil der beste Lauf zufällig auch der
+  älteste war. Test neu gebaut — bester Lauf liegt jetzt in der Mitte; beide Mutationen
+  werden gefangen.
+- Verifiziert: 62/62 Tests, Rot-Probe 6 Mutationen (nach der Reparatur alle gefangen),
+  Screenshots Solo + Training auf 390x844.
+- Version: 1.6
 
 ### 27.08.2026 18:05 — Iteration 3: Einstellungen + Datensicherung
 - Was: Einstellungs-Screen (Zahnrad im Kopf): Standardmodus, Ausgang, Legs, Doppel-In,

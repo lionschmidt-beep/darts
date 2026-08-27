@@ -28,6 +28,26 @@
   header .iconbtn{background:transparent; border:none; color:var(--muted); font-size:19px;
     padding:4px 2px; cursor:pointer; line-height:1;}
   .okmsg{font-size:13px; color:var(--accent); margin-top:10px; font-weight:600;}
+  /* Allein üben */
+  .tcard{display:flex; align-items:center; gap:12px; background:var(--card);
+    border:1px solid var(--line); border-radius:16px; padding:14px; margin-bottom:10px; cursor:pointer;}
+  .tcard:active{background:var(--card2);}
+  .tcard .tmain{flex:1; min-width:0;}
+  .tcard .tt{font-size:16px; font-weight:700;}
+  .tcard .ts{font-size:12px; color:var(--muted); margin-top:2px;}
+  .tcard .tb{font-size:22px; font-weight:800; color:var(--gold); flex:none;}
+  .tcard .tb small{font-size:11px; color:var(--muted); font-weight:600;}
+  .tbig{text-align:center; padding:26px 14px 20px; margin-top:6px;}
+  .tbig .tlabel{font-size:38px; font-weight:800; letter-spacing:-.5px;}
+  .tdots{display:flex; justify-content:center; gap:9px; margin-top:14px;}
+  .tdot{width:15px; height:15px; border-radius:50%; border:2px solid var(--line);}
+  .tdot.used{background:var(--red); border-color:transparent;}
+  .tgrid{display:flex; flex-wrap:wrap; gap:5px; margin-top:14px;}
+  .tmark{font-size:11px; font-weight:700; padding:4px 6px; border-radius:7px;
+    background:var(--card2); border:1px solid var(--line); color:var(--muted); min-width:30px; text-align:center;}
+  .tmark.hit{background:var(--accent); color:#08240f; border-color:transparent;}
+  .tmark.miss{color:var(--red); border-color:#3a2a2d;}
+  .tmark.now{border-color:var(--accent); color:var(--text);}
   .infoline{font-size:12.5px; color:var(--muted); margin:10px 3px 0;}
   .infoline b{color:var(--text); font-weight:700;}
   .pick .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:500; margin-top:2px;}
@@ -212,7 +232,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.5";
+var VER    = "1.6";
 
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
@@ -228,6 +248,8 @@ function defaultState(){
     ],
     match:null,
     history:[],
+    practice:[],
+    train:null,
     settings:defaultSettings()
   };
 }
@@ -258,6 +280,8 @@ function migrate(old){
 // Felder nachziehen, die eine aeltere v2-Fassung noch nicht kannte.
 function upgradeShape(s){
   if(!s.history) s.history=[];
+  if(!s.practice) s.practice=[];
+  if(!("train" in s)) s.train=null;
   if(!s.settings) s.settings=defaultSettings();
   var d=defaultSettings(); for(var k in d) if(!(k in s.settings)) s.settings[k]=d[k];
   s.roster.forEach(function(p){
@@ -300,6 +324,7 @@ var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, best
 var h2hSel = null;       // [idA, idB] im Direktvergleich
 var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Blick neu bestimmt
 var settingsMsg = "";    // kurze Rueckmeldung im Einstellungs-Screen
+var soloWho = null;      // wer gerade allein uebt
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -367,7 +392,12 @@ function orderPair(a, b){
 
 // Wins = von Hand gepflegter Grundstand + jedes gewonnene Match aus der Historie.
 function historyWins(id){
-  var n=0; for(var i=0;i<state.history.length;i++) if(state.history[i].winnerId===id) n++;
+  var n=0;
+  for(var i=0;i<state.history.length;i++){
+    var m = state.history[i];
+    if(m.players.length<2) continue;          // allein gespielt ist kein Sieg ueber jemanden
+    if(m.winnerId===id) n++;
+  }
   return n;
 }
 function totalWins(id){
@@ -606,9 +636,10 @@ function renderHome(){
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
     + '<div class="row">'
-    +   '<button class="btn" data-act="nav" data-view="roster" style="flex:1">&#128101;&nbsp; Team</button>'
     +   '<button class="btn" data-act="nav" data-view="h2h" style="flex:1">&#9876;&#65039;&nbsp; Duelle</button>'
+    +   '<button class="btn" data-act="nav" data-view="solo" style="flex:1">&#127919;&nbsp; Allein üben</button>'
     + '</div>'
+    + '<button class="btn ghost" data-act="nav" data-view="roster">&#128101;&nbsp; Team &amp; Wins</button>'
     + '</div>'
     + '<div class="hint">Alles bleibt auf diesem Handy gespeichert &middot; '+state.history.length+' Spiele im Verlauf.</div>';
 }
@@ -1076,6 +1107,187 @@ function renderSettings(){
     + '</div>';
 }
 
+// ---------------------------------------------------------------------------
+// Allein üben
+// Trainings landen in state.practice, NICHT in state.history - sonst zaehlte
+// jede Uebungsrunde als Sieg und die Rangliste waere Unsinn.
+// ---------------------------------------------------------------------------
+var TRAIN = {
+  double: {
+    name: "Doppel-Training",
+    hint: "Jedes Doppel von D1 bis Bull, drei Darts pro Ziel.",
+    max: 21,
+    targets: (function(){
+      var t=[]; for(var i=1;i<=20;i++) t.push({num:i, mult:2, label:"Doppel "+i, short:"D"+i});
+      t.push({num:50, mult:1, label:"Bull", short:"Bull"}); return t;
+    })(),
+    unit: "Treffer"
+  },
+  around: {
+    name: "Around the Clock",
+    hint: "1 bis 20, dann Bull. Drei Darts pro Zahl, Doppel und Triple zählen auch.",
+    max: 21,
+    targets: (function(){
+      var t=[]; for(var i=1;i<=20;i++) t.push({num:i, mult:1, label:"Die "+i, short:""+i});
+      t.push({num:50, mult:1, label:"Bull", short:"Bull"}); return t;
+    })(),
+    unit: "Treffer"
+  }
+};
+
+function startTraining(mode, playerId){
+  var cfg = TRAIN[mode]; if(!cfg) return;
+  state.train = {mode:mode, playerId:playerId, idx:0, tries:0, hits:0,
+                 darts:0, results:[], done:false, ts:Date.now()};
+  view = "train"; save();
+}
+function trainTarget(){
+  var tr = state.train; if(!tr) return null;
+  var cfg = TRAIN[tr.mode];
+  return tr.idx < cfg.targets.length ? cfg.targets[tr.idx] : null;
+}
+// Ein Dart aufs aktuelle Ziel: getroffen ja/nein. Drei Fehlversuche = weiter.
+function trainDart(hit){
+  var tr = state.train; if(!tr || tr.done) return "noop";
+  tr.darts++; tr.tries++;
+  if(hit){
+    tr.hits++;
+    tr.results.push({target:tr.idx, hit:true, darts:tr.tries});
+    tr.idx++; tr.tries=0;
+  } else if(tr.tries>=3){
+    tr.results.push({target:tr.idx, hit:false, darts:3});
+    tr.idx++; tr.tries=0;
+  }
+  if(tr.idx >= TRAIN[tr.mode].targets.length){ tr.done = true; save(); return "done"; }
+  save(); return hit ? "hit" : "miss";
+}
+function trainUndo(){
+  var tr = state.train; if(!tr || !tr.results.length && !tr.tries) return;
+  if(tr.tries>0){ tr.tries--; tr.darts--; tr.done=false; save(); return; }
+  var last = tr.results.pop();
+  tr.idx = last.target;
+  tr.tries = Math.max(0, last.darts-1);
+  tr.darts = Math.max(0, tr.darts-1);
+  if(last.hit) tr.hits = Math.max(0, tr.hits-1);
+  tr.done = false; save();
+}
+function finishTraining(){
+  var tr = state.train; if(!tr) return null;
+  var rec = null;
+  if(tr.done && state.settings.keepHistory!==false){
+    rec = {id:mid(), ts:tr.ts, ended:Date.now(), mode:tr.mode, playerId:tr.playerId,
+           score:tr.hits, max:TRAIN[tr.mode].max, darts:tr.darts};
+    state.practice.unshift(rec);
+    if(state.practice.length>300) state.practice.length = 300;
+  }
+  state.train = null; save();
+  return rec;
+}
+// Bester Wert eines Spielers in einem Trainingsmodus.
+function bestPractice(playerId, mode){
+  var b = null;
+  for(var i=0;i<state.practice.length;i++){
+    var r = state.practice[i];
+    if(r.playerId!==playerId || r.mode!==mode) continue;
+    if(!b || r.score>b.score || (r.score===b.score && r.darts<b.darts)) b = r;
+  }
+  return b;
+}
+// Bestes Solo-X01: wenigste Darts fuer diesen Startwert.
+function bestSolo(playerId, gameType){
+  var b = null;
+  for(var i=0;i<state.history.length;i++){
+    var m = state.history[i];
+    if(m.players.length!==1 || m.gameType!==gameType) continue;
+    var p = m.players[0];
+    if(p.id!==playerId || !p.darts) continue;
+    if(!b || p.darts<b.darts) b = {darts:p.darts, ts:m.ended||m.ts, avg:p.avg};
+  }
+  return b;
+}
+
+function renderSolo(){
+  if(!soloWho || !rosterOf(soloWho)) soloWho = meId() || (state.roster[0] && state.roster[0].id);
+  var chips = state.roster.map(function(p){
+    return '<button class="chip'+(p.id===soloWho?" on a":"")+'" data-act="solowho" data-id="'+p.id+'">'
+      + esc(p.name)+'</button>';
+  }).join("");
+  var st = state.settings;
+  var rec = bestSolo(soloWho, st.gameType);
+
+  function card(act, title, sub, badge){
+    return '<div class="tcard" data-act="'+act+'">'
+      + '<div class="tmain"><div class="tt">'+title+'</div><div class="ts">'+sub+'</div></div>'
+      + '<div class="tb">'+badge+'</div></div>';
+  }
+  var bd = bestPractice(soloWho, "double");
+  var ba = bestPractice(soloWho, "around");
+
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<label class="lbl">Wer übt?</label>'
+    + '<div class="chips">'+chips+'</div>'
+    + card("solox01", st.gameType+" allein",
+           rec ? "Rekord: "+rec.darts+" Darts &middot; &#8960; "+rec.avg
+               : "Noch kein Rekord &ndash; der erste Lauf setzt ihn",
+           rec ? rec.darts+'<small>D</small>' : '&mdash;')
+    + card("train_double", "Doppel-Training",
+           "D1 bis Bull, drei Darts pro Ziel",
+           bd ? bd.score+'<small>/21</small>' : '&mdash;')
+    + card("train_around", "Around the Clock",
+           "1 bis 20 und Bull der Reihe nach",
+           ba ? ba.score+'<small>/21</small>' : '&mdash;')
+    + '<div class="hint" style="text-align:left">Übungsrunden zählen nicht in die Rangliste '
+      + 'und nicht in die Duell-Bilanz &ndash; nur der eigene Rekord.</div>';
+}
+
+function renderTrain(){
+  var tr = state.train, cfg = TRAIN[tr.mode];
+  var who = esc(nameOf(tr.playerId));
+  var best = bestPractice(tr.playerId, tr.mode);
+
+  if(tr.done){
+    var quote = tr.darts ? Math.round(tr.hits/tr.darts*100) : 0;
+    var isBest = !best || tr.hits>best.score;
+    return h()
+      + '<div class="win"><div class="trophy">'+(isBest?'&#127942;':'&#127919;')+'</div>'
+      + '<h2>'+tr.hits+' von '+cfg.max+'</h2>'
+      + '<div class="sub">'+who+' &middot; '+tr.darts+' Darts &middot; '+quote+' % Trefferquote</div></div>'
+      + (isBest ? '<div class="okmsg" style="text-align:center">Neuer Rekord!</div>'
+                : '<div class="hint">Rekord steht bei '+best.score+'.</div>')
+      + '<div class="stack" style="margin-top:14px">'
+      + '<button class="btn primary" data-act="train_again">Nochmal</button>'
+      + '<button class="btn" data-act="train_end">Speichern &middot; fertig</button>'
+      + '</div>';
+  }
+
+  var tgt = trainTarget();
+  var dots = "";
+  for(var i=0;i<3;i++) dots += '<span class="tdot'+(i<tr.tries?" used":"")+'"></span>';
+  var doneList = cfg.targets.map(function(x,i){
+    var r = tr.results[i];
+    var cls = r ? (r.hit?"hit":"miss") : (i===tr.idx?"now":"");
+    return '<span class="tmark '+cls+'">'+x.short+'</span>';
+  }).join("");
+
+  return h()
+    + '<div class="legline">'+who+' &middot; Ziel <b>'+(tr.idx+1)+'</b> von '+cfg.max
+      + ' &middot; <b>'+tr.hits+'</b> Treffer'+(best?' &middot; Rekord '+best.score:'')+'</div>'
+    + '<div class="card tbig">'
+    +   '<div class="tlabel">'+(tgt?tgt.label:"")+'</div>'
+    +   '<div class="tdots">'+dots+'</div>'
+    + '</div>'
+    + '<div class="row" style="margin-top:12px">'
+    +   '<button class="btn primary" data-act="thit" style="flex:2;min-height:72px;font-size:19px">Treffer</button>'
+    +   '<button class="btn" data-act="tmiss" style="flex:1;min-height:72px;font-size:17px">Daneben</button>'
+    + '</div>'
+    + '<div class="tgrid">'+doneList+'</div>'
+    + '<div class="gctl" style="margin-top:12px">'
+    +   '<button class="btn" data-act="tundo">&#8630; Zurück</button>'
+    +   '<button class="btn ghost danger" data-act="tquit">Abbrechen</button>'
+    + '</div>';
+}
+
 function render(){
   if(view!=="game" && view!=="leg" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Legs an
   var el = document.getElementById("app");
@@ -1086,6 +1298,8 @@ function render(){
   else if(view==="roster") html = renderRoster();
   else if(view==="h2h") html = renderH2H();
   else if(view==="settings") html = renderSettings();
+  else if(view==="solo") html = renderSolo();
+  else if(view==="train" && state.train) html = renderTrain();
   else if(view==="setup") html = renderSetup();
   else { view="home"; html = renderHome(); }
   el.innerHTML = html;
@@ -1366,6 +1580,25 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="nextleg"){ view="game"; render(); return; }
 
+  // Allein üben
+  if(act==="solowho"){ soloWho=t.getAttribute("data-id"); render(); return; }
+  if(act==="solox01"){ startMatch([soloWho], {mode:"solo"}); render(); return; }
+  if(act==="train_double"){ startTraining("double", soloWho); render(); return; }
+  if(act==="train_around"){ startTraining("around", soloWho); render(); return; }
+  if(act==="thit"){ trainDart(true); render(); return; }
+  if(act==="tmiss"){ trainDart(false); render(); return; }
+  if(act==="tundo"){ trainUndo(); render(); return; }
+  if(act==="tquit"){
+    if(confirm("Übung abbrechen? Der Lauf wird nicht gespeichert.")){
+      state.train=null; view="solo"; save(); render();
+    } return;
+  }
+  if(act==="train_again"){
+    var tm=state.train.mode, tp=state.train.playerId;
+    finishTraining(); startTraining(tm, tp); render(); return;
+  }
+  if(act==="train_end"){ finishTraining(); view="solo"; render(); return; }
+
   // Einstellungen
   if(act==="s_gt"){ state.settings.gameType=parseInt(t.getAttribute("data-v"),10); save(); render(); return; }
   if(act==="s_do"){ state.settings.doubleOut=t.getAttribute("data-v")==="1"; save(); render(); return; }
@@ -1466,6 +1699,10 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
   meId:meId, orderPair:orderPair, importText:importText,
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
+  startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,
+  finishTraining:finishTraining, bestPractice:bestPractice, bestSolo:bestSolo,
+  trainTarget:trainTarget, getTrain:function(){return state.train;},
+  getPractice:function(){return state.practice;}, setSoloWho:function(x){soloWho=x;},
   totalWins:totalWins, historyWins:historyWins, migrate:migrate, upgradeShape:upgradeShape,
   defaultState:defaultState, getState:function(){return state;},
   setState:function(s2){ state=s2; }, setView:function(v){ view=v; }, getView:function(){return view;},
