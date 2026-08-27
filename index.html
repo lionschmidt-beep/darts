@@ -71,6 +71,9 @@
     font-size:13px; color:#ffb4b6; line-height:1.45;}
   .alarm .alarmlink{color:var(--text); font-weight:700; text-decoration:underline; cursor:pointer;
     display:inline-block; padding:6px 0;}
+  .warnzeile{font-size:12.5px; color:var(--gold); background:rgba(245,196,81,.09);
+    border:1px solid rgba(245,196,81,.28); border-radius:11px; padding:9px 11px;
+    margin:0 0 12px; line-height:1.4;}
   .infoline{font-size:12.5px; color:var(--muted); margin:10px 3px 0;}
   .infoline b{color:var(--text); font-weight:700;}
   .pick .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:500; margin-top:2px;}
@@ -82,7 +85,7 @@
   .btn.primary{background:var(--accent); color:#08240f; border-color:transparent;}
   .btn.ghost{background:transparent;}
   .btn.danger{color:var(--red); border-color:#3a2a2d;}
-  .btn.sm{min-height:40px; font-size:14px; padding:0 12px; border-radius:11px; width:auto;}
+  .btn.sm{min-height:44px; font-size:14px; padding:0 12px; border-radius:11px; width:auto;}
   .row{display:flex; gap:10px;}
   .stack{display:flex; flex-direction:column; gap:10px;}
   .muted{color:var(--muted);}
@@ -106,7 +109,7 @@
   /* Wins-Stepper (Team verwalten) */
   .wctl{display:flex; align-items:center; flex:none; background:var(--card2);
     border:1px solid var(--line); border-radius:11px; overflow:hidden;}
-  .wctl button{width:40px; min-height:42px; border:none; background:transparent; color:var(--text);
+  .wctl button{width:46px; min-height:46px; border:none; background:transparent; color:var(--text);
     font-size:22px; font-weight:800; line-height:1; cursor:pointer;}
   .wctl button:active{background:var(--line);}
   .wctl .wv{min-width:42px; text-align:center; font-size:18px; font-weight:800; cursor:pointer;
@@ -278,7 +281,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.17";
+var VER    = "1.18";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -385,6 +388,7 @@ function upgradeShape(s){
 function trainBekannt(){
   return !!(state && state.train && typeof TRAIN === "object" && TRAIN[state.train.mode]);
 }
+var speicherKaputt = false;   // localStorage lehnt ab (Safari-Privatmodus, Quota)
 var standDefekt = false;      // gespeicherter Stand war nicht lesbar
 function load(){
   var raw = null;
@@ -408,7 +412,6 @@ function load(){
   return defaultState();
 }
 var LIVE_VIEWS = ["game","leg","win","train"];
-var speicherKaputt = false;   // localStorage lehnt ab (Safari-Privatmodus, Quota)
 var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraendert
 function save(){
   try{
@@ -434,6 +437,10 @@ function restoreView(){
 }
 
 var state = load();
+// Einmal probeweise schreiben: sonst behauptet die Startseite "alles bleibt
+// gespeichert", bevor ueberhaupt jemand geprueft hat, ob das Geraet das kann.
+try{ localStorage.setItem(KEY+"_probe","1"); localStorage.removeItem(KEY+"_probe"); }
+catch(e){ speicherKaputt = true; }
 var view  = "home";          // home | roster | setup | game | leg | win | h2h | player | solo | train | settings
                              // Der gemerkte Bildschirm wird ganz unten gesetzt -
                              // dort sind TRAIN und die Render-Funktionen belegt.
@@ -447,7 +454,8 @@ var soloWho = null;      // wer gerade allein uebt
 var playerSel = null;    // offene Spieler-Akte
 var sumInput = "";       // getippte Aufnahme-Summe
 var pendingFinish = null; // Summe, die ausmacht - wartet auf die Dart-Zahl
-var pendingOpen = null;   // Summe bei Doppel-In - wartet auf "war ein Doppel dabei?" 
+var pendingOpen = null;   // Summe bei Doppel-In - wartet auf "war ein Doppel dabei?"
+var sumMsg = "";          // Hinweis am Zehnerblock (abgewiesene Ziffer)
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -455,7 +463,7 @@ var pendingOpen = null;   // Summe bei Doppel-In - wartet auf "war ein Doppel da
 function dartValue(mult, num){
   // Fehlwurf: der gedrueckte Multiplikator darf daraus kein "D0" machen - sonst
   // eroeffnet ein Danebenwurf ein Doppel-In-Leg.
-  if(num===0)  return {value:0,  isDouble:false, label:"&ndash;"};
+  if(num===0)  return {value:0,  isDouble:false, label:"&#10007;"};   // "20 5 –" las sich wie eine Rechnung
   if(num===25) return {value:25, isDouble:false, label:"25"};       // aeusserer Bull = Single
   if(num===50) return {value:50, isDouble:true,  label:"Bull"};     // Bull = Doppel-25
   var pre = mult===3 ? "T" : (mult===2 ? "D" : "");
@@ -869,16 +877,18 @@ function duelCard(){
     var lead = x.winsA===x.winsB ? "" : (x.winsA>x.winsB ? " la" : " lb");
     return '<div class="duel'+lead+'" data-act="h2hopen" data-a="'+x.a+'" data-b="'+x.b+'">'
       + '<span class="dn dna">'+esc(nameOf(x.a))+'</span>'
-      + '<span class="ds"><b class="va">'+x.winsA+'</b><i>:</i><b class="vb">'+x.winsB+'</b></span>'
+      + '<span class="ds"><b class="'+(x.winsA>=x.winsB?"va":"vb")+'">'+x.winsA+'</b><i>:</i>'
+      +   '<b class="'+(x.winsB>x.winsA?"va":"vb")+'">'+x.winsB+'</b></span>'
       + '<span class="dn dnb">'+esc(nameOf(x.b))+'</span>'
       + '</div>';
   }).join("");
   var fuss = "";
   if(alle.length > d.length)
-    fuss += '<div class="duelfuss">+ '+(alle.length-d.length)+' weitere Duelle</div>';
+    fuss += '<div class="duelfuss">+ '+(alle.length-d.length)
+      + (alle.length-d.length===1?' weiteres Duell':' weitere Duelle')+'</div>';
   if(mehr)
-    fuss += '<div class="duelfuss">Dazu '+mehr+' Runden mit mehr Leuten &ndash; '
-      + 'die zählen in die Rangliste, aber in kein Duell.</div>';
+    fuss += '<div class="duelfuss">Dazu '+mehr+(mehr===1?' Runde':' Runden')+' mit mehr Leuten '
+      + '&ndash; '+(mehr===1?'die zählt':'die zählen')+' in die Rangliste, aber in kein Duell.</div>';
   return '<div class="card" style="margin-bottom:14px">'
     + '<div class="cardhead"><span>DUELLE</span>'
     +   '<span data-act="nav" data-view="h2h" style="font-weight:600">alle &rsaquo;</span></div>'
@@ -932,7 +942,12 @@ function renderHome(){
     + '</div>'
     + '<button class="btn ghost" data-act="nav" data-view="roster">&#128101;&nbsp; Team &amp; Wins</button>'
     + '</div>'
-    + '<div class="hint">Alles bleibt auf diesem Handy gespeichert &middot; '+state.history.length+' Spiele im Verlauf.</div>';
+    + '<div class="hint">'
+      + (speicherKaputt
+         ? 'Dieses Gerät speichert nichts &ndash; siehe oben.'
+         : 'Alles bleibt auf diesem Handy gespeichert &middot; '+state.history.length
+           + (state.history.length===1?' Spiel':' Spiele')+' im Verlauf.')
+      + '</div>';
 }
 
 function renderRoster(){
@@ -947,8 +962,8 @@ function renderRoster(){
       +   '<span class="wv" data-act="winset" data-id="'+p.id+'" title="Antippen zum Eintragen">'+totalWins(p.id)+'</span>'
       +   '<button data-act="win" data-id="'+p.id+'" data-d="1" aria-label="Win dazu">+</button>'
       + '</div>'
-      + '<button class="btn sm ghost" data-act="rename" data-id="'+p.id+'" style="width:auto;padding:0 11px" aria-label="Umbenennen">&#9998;</button>'
-      + '<button class="btn sm danger" data-act="del" data-id="'+p.id+'">&#128465;</button>'
+      + '<button class="btn sm ghost" data-act="rename" data-id="'+p.id+'" style="width:auto;min-width:46px;padding:0 12px" aria-label="Umbenennen">&#9998;</button>'
+      + '<button class="btn sm danger" data-act="del" data-id="'+p.id+'" style="min-width:46px" aria-label="Löschen">&#128465;</button>'
       + '</div>';
   }).join("");
   return h()
@@ -984,8 +999,16 @@ function renderSetup(){
   function bo(n){ return '<button class="btn'+(setupSel.bestOf===n?" on":"")+'" data-act="bo" data-n="'+n+'">'
     + (n===1?"1 Leg":"Bo"+n) + '</button>'; }
   var nSel = setupSel.selected.size;
+  var offen = "";
+  if(state.match) offen = state.match.finished
+    ? 'Das gewonnene Spiel ist noch nicht eingetragen &ndash; ein Start verwirft es.'
+    : 'Es läuft noch ein Spiel &ndash; ein Start verwirft es.';
+  else if(state.train && !state.train.done)
+    offen = 'Es läuft noch eine Übung &ndash; ein Start bricht sie ab.';
+
   return h()
     + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + (offen ? '<div class="warnzeile">&#9888;&#65039; '+offen+'</div>' : '')
     + '<label class="lbl">Wer spielt mit? ('+nSel+' gewählt)</label>'
     + picks
     + '<label class="lbl" style="margin-top:14px">Spielmodus</label>'
@@ -1058,6 +1081,20 @@ function lastTurnLine(m){
 // drei Darts einzeln. Der Einzel-Modus bleibt fuer alle, die genau zaehlen wollen.
 // ---------------------------------------------------------------------------
 
+// Welche Summen sind mit drei Darts ueberhaupt erreichbar? 179, 178, 176, 175,
+// 173, 172, 169, 166 und 163 stehen so nicht auf dem Board - wer sie eintippt,
+// hat sich vertippt.
+var AUFNAHME_MOEGLICH = (function(){
+  var w = {0:1, 25:1, 50:1};
+  for(var n=1;n<=20;n++){ w[n]=1; w[n*2]=1; w[n*3]=1; }
+  var einzeln = Object.keys(w).map(Number);
+  var s = {};
+  for(var a=0;a<einzeln.length;a++)
+    for(var b=0;b<einzeln.length;b++)
+      for(var c=0;c<einzeln.length;c++) s[einzeln[a]+einzeln[b]+einzeln[c]] = true;
+  return s;
+})();
+
 // Eine komplette Aufnahme buchen. dartsUsed nur beim Ausmachen relevant.
 // Rueckgabe: ok | bust | leg | win | finish | ungueltig | noop
 // opened: undefined = die App muss fragen, true = mit Doppel eroeffnet,
@@ -1066,7 +1103,7 @@ function lastTurnLine(m){
 function applyTurnSum(sum, dartsUsed, opened){
   var m = state.match; if(!m || m.finished) return "noop";
   sum = Math.round(sum);
-  if(!(sum>=0 && sum<=180)) return "ungueltig";
+  if(!(sum>=0 && sum<=180) || !AUFNAHME_MOEGLICH[sum]) return "ungueltig";
   var p = m.players[m.currentIdx];
 
   if(m.doubleIn && p.legStart){
@@ -1111,8 +1148,8 @@ function applyTurnSum(sum, dartsUsed, opened){
 function renderSumPad(m, cur){
   var val = sumInput==="" ? 0 : parseInt(sumInput,10);
   var rest = cur.score - val;
-  var warn = "";
-  if(sumInput!==""){
+  var warn = sumMsg;
+  if(!warn && sumInput!==""){
     if(val>180) warn = 'Mehr als 180 gibt es nicht';
     else if(rest<0) warn = 'Mehr als der Rest &ndash; das wäre überworfen';
     else if(m.doubleOut && rest===1) warn = 'Rest 1 ist nicht ausspielbar &ndash; überworfen';
@@ -1444,7 +1481,7 @@ function renderH2H(){
              + '<div class="h2hsub">'
                + (r.winsA===r.winsB ? 'ausgeglichen'
                   : (r.winsA>r.winsB ? pct+' % für '+na : (100-pct)+' % für '+nb))
-               + ' &middot; '+tot+' Duelle</div>'
+               + ' &middot; '+tot+(tot===1?' Duell':' Duelle')+'</div>'
            : '<div class="h2hsub">Noch kein Duell zu zweit gespielt.</div>')
     +   (streakTxt ? '<div class="h2hstreak">&#128293; '+streakTxt+'</div>' : '')
     + '</div>'
@@ -1457,7 +1494,8 @@ function renderH2H(){
         + '</div>' : '')
     + (dots ? '<div class="dots">'+dots+'<span class="dotsl">letzte Duelle, links = neu</span></div>' : '')
     + (r.multiN ? '<div class="hint" style="text-align:left;margin-top:12px">'
-        + 'Dazu '+r.multiN+' Runden mit mehr Leuten &middot; '+na+' '+r.multiA+' &middot; '+nb+' '+r.multiB
+        + 'Dazu '+r.multiN+(r.multiN===1?' Runde':' Runden')+' mit mehr Leuten &middot; '
+        + na+' '+r.multiA+' &middot; '+nb+' '+r.multiB
         + ' <span class="muted">(zählen nicht ins Duell)</span></div>' : '')
     + (rows ? '<label class="lbl" style="margin-top:16px">Die letzten Duelle</label>'
         + '<div class="card">'+rows+'</div>' : '')
@@ -1566,8 +1604,8 @@ function renderSettings(){
     + '<label class="lbl" style="margin-top:16px">Verlauf</label>'
     + toggle("s_hist", st.keepHistory!==false, "Spiele mitschreiben",
              "Ohne Verlauf zählen auch Siege und Übungsrekorde nicht mehr")
-    + '<div class="infoline"><b>'+nGames+'</b> Spiele &middot; <b>'+nPlayers+'</b> Spieler '
-      + '&middot; Version '+VER+'</div>'
+    + '<div class="infoline"><b>'+nGames+'</b> '+(nGames===1?'Spiel':'Spiele')
+      + ' &middot; <b>'+nPlayers+'</b> Spieler &middot; Version '+VER+'</div>'
 
     + '<label class="lbl" style="margin-top:16px">Sicherung</label>'
     + '<div class="stack">'
@@ -1587,7 +1625,8 @@ function renderSettings(){
 
     + '<label class="lbl" style="margin-top:18px">Aufräumen</label>'
     + '<div class="stack">'
-    +   '<button class="btn danger" data-act="s_clearhist">Verlauf löschen ('+nGames+' Spiele)</button>'
+    +   '<button class="btn danger" data-act="s_clearhist">Verlauf löschen ('+nGames
+      + (nGames===1?' Spiel':' Spiele')+')</button>'
     +   '<button class="btn danger" data-act="s_reset">Alles zurücksetzen</button>'
     + '</div>';
 }
@@ -1894,7 +1933,8 @@ function renderPlayer(){
     +   (s.t180 ? row("180er", s.t180) : '')
     +   (s.legsWon+s.legsLost ? row("Legs", s.legsWon+' : '+s.legsLost) : '')
     + '</div>'
-    + (s.solo ? '<div class="infoline">Dazu <b>'+s.solo+'</b> Runden allein &middot; Schnitt '
+    + (s.solo ? '<div class="infoline">Dazu <b>'+s.solo+'</b> '+(s.solo===1?'Runde':'Runden')
+        + ' allein &middot; Schnitt '
         + (s.soloDarts ? (s.soloScored/s.soloDarts*3).toFixed(1) : '0.0')
         + (s.soloBest ? ' &middot; beste Aufnahme '+s.soloBest : '')
         + ' <span class="muted">(zählen nicht in die Zahlen oben)</span></div>' : '')
@@ -2396,9 +2436,10 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="sumkey"){
     var k=t.getAttribute("data-k");
-    if(k==="del"){ sumInput=sumInput.slice(0,-1); render(); return; }
+    if(k==="del"){ sumInput=sumInput.slice(0,-1); sumMsg=""; render(); return; }
     if(k==="ok"){
       if(sumInput==="") return;
+      sumMsg="";
       var v=parseInt(sumInput,10);
       var r=applyTurnSum(v);
       if(r==="needopen"){ pendingOpen=v; render(); return; }
@@ -2406,8 +2447,14 @@ document.getElementById("app").addEventListener("click", function(ev){
       if(r==="ungueltig"){ sumInput=""; render(); return; }
       sumInput=""; render(); return;
     }
-    if(sumInput.length<3) sumInput += k;
-    if(parseInt(sumInput,10)>180) sumInput = k;      // 4 -> 45 -> 456 waere Unsinn
+    // Frueher setzte eine zu grosse Zahl das Feld still auf die letzte Ziffer
+    // zurueck: aus 2-0-0 wurde "0", und wer nicht hinsah, buchte eine Null.
+    var probe = sumInput + k;
+    if(probe.length>3 || parseInt(probe,10)>180){
+      sumMsg = "Mehr als 180 gibt es nicht &ndash; Ziffer verworfen.";
+    } else {
+      sumInput = probe; sumMsg = "";
+    }
     render(); return;
   }
   if(act==="sumfin"){

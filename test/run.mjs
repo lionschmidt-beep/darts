@@ -427,7 +427,7 @@ t("parseSpeech: Kommandos und Bull", () => {
   eq(D.parseSpeech("weiter", []).cmd, "skip");
   eq(D.parseSpeech("Bull", []).throws[0].label, "Bull");
   eq(D.parseSpeech("daneben daneben daneben", []).throws.map(x => x.num), [0, 0, 0]);
-  eq(D.parseSpeech("daneben", []).throws[0].label, "&ndash;", "Fehlwurf hat kein Doppel-Label");
+  eq(D.parseSpeech("daneben", []).throws[0].label, "&#10007;", "Fehlwurf ist ein Kreuz, kein Strich");
 });
 
 // ================================================================ Rendering
@@ -627,8 +627,8 @@ t("Einstellungs-Screen rendert und zeigt die echten Zahlen", () => {
   playMatch(D, ["lion", "arne"], 0);
   D.setView("settings"); D.render();
   ok(app.innerHTML.includes("Standard für neue Spiele"), "Kopfbereich da");
-  ok(/<b>1<\/b> Spiele/.test(app.innerHTML), "Verlaufszaehler zeigt die echte Zahl");
-  ok(app.innerHTML.includes("Verlauf löschen (1 Spiele)"), "echte Zahl, nicht Platzhalter");
+  ok(app.innerHTML.indexOf("<b>1</b> Spiel &middot;") >= 0, "Verlaufszaehler im Singular");
+  ok(app.innerHTML.includes("Verlauf löschen (1 Spiel)"), "echte Zahl im Singular");
 });
 
 t("Verlauf loeschen friert die Wins ein statt sie zu verlieren", () => {
@@ -2544,6 +2544,111 @@ t("Der hoehere Stellwurf steht vorn", () => {
   eq(falsch, [], "so sagt man es nicht an");
   eq(D.checkout(170, 3, true), ["T20", "T20", "Bull"]);
   eq(D.checkout(161, 3, true), ["T20", "T17", "Bull"], "der klassische 161er");
+});
+
+// ================================================================ Zweite Nutzer-Pruefung
+t("Der Zehnerblock wirft keine Eingabe still weg", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  const anzeige = () => (ctx.app.innerHTML.match(/<div class="sumval[^"]*">([^<]*)<\/div>/) || [])[1];
+  ctx.click("sumkey", { "data-k": 2 });
+  ctx.click("sumkey", { "data-k": 0 });
+  eq(anzeige(), "20", "20 steht da");
+  ctx.click("sumkey", { "data-k": 0 });               // 200 waere zu viel
+  eq(anzeige(), "20",
+     "die dritte Ziffer wird ignoriert, nicht die ganze Eingabe verworfen. War: " + anzeige());
+  ctx.click("sumkey", { "data-k": "ok" });
+  eq(D.getMatch().players[0].score, 481, "und es werden 20 gebucht, nicht 0");
+});
+
+t("Eine abgewiesene Ziffer wird gemeldet", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 9 });
+  ctx.click("sumkey", { "data-k": 9 });
+  ctx.click("sumkey", { "data-k": 9 });               // 999
+  ok(/mehr als 180|geht nicht|zu hoch/i.test(ctx.app.innerHTML),
+     "sonst sieht eine verschluckte Ziffer aus wie eine gueltige Eingabe");
+});
+
+t("Unmoegliche Aufnahmen werden abgewiesen", () => {
+  const { D } = boot();
+  D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  // Mit drei Darts nicht erreichbar - es gibt kein Feld dafuer
+  [179, 178, 176, 175, 173, 172, 169, 166, 163].forEach(n => {
+    eq(D.applyTurnSum(n), "ungueltig", n + " gibt es mit drei Darts nicht");
+  });
+  // Diese schon
+  [180, 177, 174, 171, 170, 167, 164, 161, 160, 100, 26, 0].forEach(n => {
+    ok(D.applyTurnSum(n) !== "ungueltig", n + " ist eine mögliche Aufnahme");
+    D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  });
+});
+
+t("In der Duell-Zeile gehoert die Farbe dem, der fuehrt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 1);                  // Arne gewinnt -> Lion 0:1 Arne
+  D.setView("home"); D.render();
+  const zeile = (ctx.app.innerHTML.match(/<div class="duel[^"]*"[^>]*>[\s\S]*?<\/div>\s*<\/div>/) || [""])[0];
+  // Die gruene Klasse .va darf nicht auf der Zahl des Verlierers sitzen
+  const m = zeile.match(/<b class="(va|vb)">(\d+)<\/b><i>:<\/i><b class="(va|vb)">(\d+)<\/b>/);
+  ok(m, "Zahlen gefunden: " + zeile.slice(0, 200));
+  const [, kl, links, kr, rechts] = m;
+  const linksFuehrt = +links > +rechts;
+  eq(kl, linksFuehrt ? "va" : "vb", "linke Zahl (" + links + ") traegt die richtige Farbe");
+  eq(kr, linksFuehrt ? "vb" : "va", "rechte Zahl (" + rechts + ") traegt die richtige Farbe");
+});
+
+t("Ein einzelnes Duell heisst nicht 'Duelle'", () => {
+  const ctx = boot();
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  // Nur die Anteilszeile pruefen - "Duelle" steht auch in Ueberschriften.
+  const sub = () => (ctx.app.innerHTML.match(/<div class="h2hsub">([^<]*)<\/div>/) || [])[1] || "";
+  ctx.D.setView("h2h"); ctx.D.render();
+  ok(/1 Duell$/.test(sub().trim()), "im Singular. War: " + sub());
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  ctx.D.setView("h2h"); ctx.D.render();      // playMatch schaltet auf das Spiel um
+  ok(/2 Duelle$/.test(sub().trim()), "und im Plural wieder mit e. War: " + sub());
+});
+
+t("Ein Fehlwurf liest sich nicht wie ein Minuszeichen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["20", "5", "MISS"]);
+  D.setView("game"); D.render();
+  // Im HTML steht die Entitaet, nicht das Zeichen - danach muss man suchen.
+  const roh = (ctx.app.innerHTML.match(/<div class="lastturn[^"]*">([\s\S]*?)<\/div>/) || [])[1] || "";
+  ok(!/&ndash;|&mdash;|\s-\s/.test(roh),
+     "'20 5 –' liest sich wie eine Rechnung. War: " + roh.replace(/<[^>]+>/g, ""));
+  const zeile = zuletztZeile(ctx) || "";
+  ok(/20/.test(zeile) && /25/.test(zeile), "Summe stimmt trotzdem: " + zeile);
+});
+
+t("Der Speicher-Satz behauptet nichts, was noch nicht geprueft ist", () => {
+  const ctx = boot({}, { schreibenScheitert: true });
+  ctx.D.setView("home"); ctx.D.render();
+  const html = ctx.app.innerHTML;
+  ok(!/Alles bleibt auf diesem Handy gespeichert/.test(html) ||
+     /speichert nicht/i.test(html),
+     "auf einem Geraet, das nicht speichern kann, darf der Satz nicht allein dastehen");
+});
+
+t("Der Setup-Screen warnt, bevor man alles einstellt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 5 });
+  throwDart(D, "T20");
+  D.setView("setup"); D.render();
+  ok(/läuft noch|verworfen|noch ein Spiel/i.test(ctx.app.innerHTML),
+     "sonst stellt man erst alles ein und wird dann ueberrascht");
 });
 
 // ---------------------------------------------------------------- Ausgabe
