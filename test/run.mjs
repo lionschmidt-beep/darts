@@ -468,6 +468,15 @@ function playMatch(D, ids, winIdx, opts) {
     D.setScore(winIdx, 40);
     D.applyDart(2, 20);
   }
+  // Ab drei Spielern wird danach um Platz 2 gespielt - fuer die meisten Tests
+  // ist nur das Endergebnis interessant, also durchspielen.
+  let schutz = 0;
+  while (D.getMatch() && !D.getMatch().finished && schutz++ < 6) {
+    const m = D.getMatch();
+    D.setView("game");
+    D.setScore(m.currentIdx, 40);
+    D.applyDart(2, 20);
+  }
   return D.finishMatch();
 }
 
@@ -1181,6 +1190,13 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
   D.setScore(0, 40); eq(throwDart(D, "D20"), "win");
   D.render(); sammle();                                            // winagain/winhome
   D.setView("home"); D.render(); sammle();                         // "Ergebnis eintragen"
+  D.finishMatch();
+
+  // Ausspielen um Platz 2 (drei Spieler, ein Leg)
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");
+  D.render(); sammle();                                            // nextplatz/platzende
+  ctx.click("platzende");
   D.finishMatch();
 
   // Doppel-In-Frage im Summen-Modus
@@ -2649,6 +2665,176 @@ t("Der Setup-Screen warnt, bevor man alles einstellt", () => {
   D.setView("setup"); D.render();
   ok(/läuft noch|verworfen|noch ein Spiel/i.test(ctx.app.innerHTML),
      "sonst stellt man erst alles ein und wird dann ueberrascht");
+});
+
+// ================================================================ Um Platz 2 weiterspielen
+// Belegt aus der Recherche: "Platz zwei und drei können so nicht ausgespielt
+// werden. Dies ist insbesondere dann demotivierend, wenn ein Spieler dominant
+// ist." Bei drei Leuten sass der Abgehaengte bisher nur da.
+t("Nach dem Sieger laeuft das Spiel um Platz 2 weiter", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  eq(throwDart(D, "D20"), "platz", "Lion ist durch, das Spiel geht weiter");
+  const m = D.getMatch();
+  ok(!m.finished, "das Match ist noch nicht zu Ende");
+  eq(m.platz, ["lion"], "Lion hat Platz 1");
+  ok(m.currentIdx !== 0, "Lion wirft nicht mehr");
+  ok(["arne", "justus"].includes(m.players[m.currentIdx].id), "einer der anderen ist dran");
+});
+
+t("Der Durchgekommene wird beim Weiterreichen uebersprungen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");            // Lion raus
+  ctx.click("nextplatz");
+  const gesehen = [];
+  for (let i = 0; i < 6; i++) {
+    gesehen.push(D.getMatch().players[D.getMatch().currentIdx].id);
+    D.endTurn();
+  }
+  ok(!gesehen.includes("lion"), "Lion kommt nicht mehr dran: " + gesehen.join(","));
+  ok(gesehen.includes("arne") && gesehen.includes("justus"), "die anderen wechseln sich ab");
+});
+
+t("Wenn nur noch einer uebrig ist, ist Schluss", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");            // Lion: Platz 1
+  ctx.click("nextplatz");
+  const zweiter = D.getMatch().players[D.getMatch().currentIdx];
+  D.setScore(D.getMatch().currentIdx, 40);
+  eq(throwDart(D, "D20"), "win", "der zweite Ausmacher beendet das Match");
+  eq(D.getMatch().finished, true);
+  eq(D.getMatch().platz.length, 3,
+     "alle drei Plaetze stehen - wer als Letzter uebrig ist, ist Dritter");
+  eq(D.getMatch().platz[1], zweiter.id);
+});
+
+t("Die Reihenfolge landet in der Historie", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");
+  ctx.click("nextplatz");
+  const i2 = D.getMatch().currentIdx;
+  const zweiter = D.getMatch().players[i2].id;
+  D.setScore(i2, 40); throwDart(D, "D20");
+  const rec = D.finishMatch();
+  eq(rec.winnerId, "lion", "Sieger bleibt der Sieger");
+  eq(rec.platz[0], "lion");
+  eq(rec.platz[1], zweiter, "und Platz 2 ist festgehalten");
+  eq(D.totalWins("lion"), 2, "nur der Sieger bekommt den Win");
+  eq(D.totalWins(zweiter === "arne" ? "arne" : "justus"), zweiter === "arne" ? 3 : 2,
+     "Platz 2 zaehlt nicht als Sieg");
+});
+
+t("Zu zweit gibt es nichts auszuspielen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  eq(throwDart(D, "D20"), "win", "bei zwei Spielern ist der Sieg das Ende");
+  eq(D.getMatch().finished, true);
+  eq(D.getMatch().platz, [], "und es wird gar keine Platzliste gefuehrt");
+  eq(D.getMatch().players[0].legsWon, 1, "stattdessen zaehlt das Leg ganz normal");
+});
+
+t("Bei Legs wird nicht um Plaetze gespielt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setScore(0, 40);
+  eq(throwDart(D, "D20"), "leg", "im Leg-Modus zaehlt das Leg, nicht der Platz");
+});
+
+t("Der Platz-Screen zeigt, wer durch ist und wer noch spielt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");
+  D.render();
+  ok(/Lion/.test(ctx.app.innerHTML), "der Durchgekommene steht da");
+  ok(/Platz 2/i.test(ctx.app.innerHTML), "und worum jetzt gespielt wird");
+  ok(ctx.has("nextplatz"), "weiter");
+  ok(ctx.has("winhome") || ctx.has("platzende"), "und ein Weg, es sein zu lassen");
+});
+
+// ================================================================ Bildschirm und Safari
+t("Der Bildschirm wird nur waehrend des Spielens wachgehalten", () => {
+  const ctx = boot();
+  const angefordert = [];
+  ctx.win.navigator.wakeLock = {
+    request: () => { angefordert.push("an"); return Promise.resolve({
+      release: () => { angefordert.push("aus"); return Promise.resolve(); },
+      addEventListener: () => {} }); },
+  };
+  ctx.D.setView("home"); ctx.D.render();
+  eq(angefordert.length, 0, "auf der Startseite nicht");
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  ctx.D.setView("game"); ctx.D.render();
+  return new Promise(r => setTimeout(r, 0)).then(() => {
+    eq(angefordert[0], "an", "im Spiel schon");
+    ctx.D.setView("home"); ctx.D.render();
+    return new Promise(r => setTimeout(r, 0));
+  }).then(() => {
+    ok(angefordert.includes("aus"), "und danach wieder freigegeben: " + angefordert.join(","));
+  });
+});
+
+t("Ohne wakeLock im Browser passiert einfach nichts", () => {
+  const ctx = boot();
+  delete ctx.win.navigator.wakeLock;
+  let err = null;
+  try {
+    ctx.D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+    ctx.D.setView("game"); ctx.D.render();
+  } catch (e) { err = e.message; }
+  eq(err, null, "kein Absturz auf Geraeten, die das nicht koennen");
+});
+
+t("Safari ohne Installation wird vor dem 7-Tage-Loeschen gewarnt", () => {
+  const ctx = boot();
+  ctx.win.navigator.userAgent =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 " +
+    "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+  ctx.win.navigator.standalone = false;
+  ctx.win.matchMedia = () => ({ matches: false });
+  ctx.D.setView("settings"); ctx.D.render();
+  ok(/7 Tagen/.test(ctx.app.innerHTML),
+     "genau der Fall 'einmal die Woche spielen' - da ist der Verlauf sonst weg");
+  ok(/Home-Bildschirm/.test(ctx.app.innerHTML), "mit dem Ausweg daneben");
+});
+
+t("Installiert oder in Chrome steht die Warnung nicht im Weg", () => {
+  const ctx = boot();
+  ctx.win.navigator.userAgent =
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
+    "Chrome/120.0.0.0 Mobile Safari/537.36";
+  ctx.win.matchMedia = () => ({ matches: false });
+  ctx.D.setView("settings"); ctx.D.render();
+  ok(!/7 Tagen/.test(ctx.app.innerHTML), "Chrome loescht nicht nach sieben Tagen");
+
+  const b = boot();
+  b.win.navigator.userAgent = "Mozilla/5.0 (iPhone) Version/17.0 Mobile Safari/604.1";
+  b.win.navigator.standalone = true;                  // vom Home-Bildschirm gestartet
+  b.win.matchMedia = () => ({ matches: false });
+  b.D.setView("settings"); b.D.render();
+  ok(!/7 Tagen/.test(b.app.innerHTML), "installiert gilt die Regel nicht");
+});
+
+t("Ein Dart ist kein 'Darts'", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");            // ein einziger Dart
+  D.render();
+  ok(ctx.app.innerHTML.indexOf("1 Darts") < 0,
+     "auch auf dem Platz-Screen zaehlt das Zahlwort");
+  ok(ctx.app.innerHTML.indexOf("1 Dart<") >= 0 || ctx.app.innerHTML.indexOf("1 Dart ") >= 0, "im Singular");
 });
 
 // ---------------------------------------------------------------- Ausgabe

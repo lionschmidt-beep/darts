@@ -281,7 +281,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.18";
+var VER    = "1.19";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -366,6 +366,7 @@ function upgradeShape(s){
     if(!Array.isArray(m._undo)) m._undo=[];
     if(!("lastTurn" in m)) m.lastTurn=null;
     if(!Array.isArray(m.currentTurn)) m.currentTurn=[];
+    if(!Array.isArray(m.platz)) m.platz=[];
     if(typeof m.currentIdx!=="number" || !m.players[m.currentIdx]) m.currentIdx=0;
     if(typeof m.gameType!=="number") m.gameType=501;
     if(typeof m.turnStartScore!=="number") m.turnStartScore=m.players[m.currentIdx].score;
@@ -411,7 +412,7 @@ function load(){
   }catch(e){}
   return defaultState();
 }
-var LIVE_VIEWS = ["game","leg","win","train"];
+var LIVE_VIEWS = ["game","leg","platz","win","train"];
 var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraendert
 function save(){
   try{
@@ -431,7 +432,8 @@ function save(){
 function restoreView(){
   var v = state._view;
   if(v==="train") return trainBekannt() ? "train" : "home";
-  if(v==="game" || v==="leg") return (state.match && !state.match.finished) ? v : "home";
+  if(v==="game" || v==="leg" || v==="platz")
+    return (state.match && !state.match.finished) ? v : "home";
   if(v==="win")  return (state.match && state.match.finished) ? "win" : "home";
   return "home";
 }
@@ -478,12 +480,16 @@ for(var n=1;n<=20;n++) ALLTHROWS.push({value:n*2, label:"D"+n});
 for(var n=1;n<=20;n++) ALLTHROWS.push({value:n,   label:""+n});
 ALLTHROWS.push({value:25,label:"25"}); ALLTHROWS.push({value:50,label:"Bull"});
 
-// Auf welchem Doppel macht man am liebsten aus? D20, D16, D8 und D4 halbieren
-// sich sauber, wenn man danebenwirft (40 -> 20 -> 10 -> 5); D1, D3, D5 sind die
-// schlechtesten Felder des Boards. Bis 1.16 wurde DOUBLES von D1 aufsteigend
-// durchsucht und der erste Treffer genommen - der Rechner schlug damit
-// systematisch das schlechteste Doppel vor (93 von 162 Finishes).
-var DOPPEL_VORLIEBE = [40,32,16,8,24,20,36,28,12,4,50,38,34,30,26,22,18,14,10,6,2];
+// Auf welchem Doppel macht man am liebsten aus? Entscheidend ist, wie lange die
+// Halbierungskette haelt, wenn man danebenwirft:
+//   D16: 32 -> 16 -> 8 -> 4 -> 2   (fuenf Stufen, alle gerade)
+//   D20: 40 -> 20 -> 10 -> 5       (nach drei Stufen ungerade, dann braucht man
+//                                   wieder einen Stellwurf)
+// Deshalb steht D16 vorn - das ist die gaengige Konvention, nicht D20.
+// D1, D3, D5 sind die schlechtesten Felder des Boards und stehen hinten.
+// Bis 1.16 wurde DOUBLES von D1 aufsteigend durchsucht und der erste Treffer
+// genommen - der Rechner schlug damit systematisch das schlechteste vor.
+var DOPPEL_VORLIEBE = [32,40,16,8,24,20,36,28,12,4,50,38,34,30,26,22,18,14,10,6,2];
 
 // Wie ungern zielt man auf dieses Feld, nur um zu stellen? Kleiner = lieber.
 function stellKosten(label){
@@ -617,7 +623,7 @@ function startMatch(playerIds, opts){
     players: playerIds.map(function(id){ return freshPlayer(id, gt); }),
     currentIdx:0, startIdx:0, legNo:1,
     currentTurn:[], turnStartScore:gt, lastTurn:null,
-    legs:[], finished:false, winnerId:null, _undo:[]
+    legs:[], platz:[], finished:false, winnerId:null, _undo:[]
   };
   curMult = 1; view = "game"; save();
 }
@@ -625,7 +631,7 @@ function startMatch(playerIds, opts){
 // Alles, was ein Undo wiederherstellen muss - an EINER Stelle. Wer hier ein Feld
 // vergisst, baut eine Anzeige, die nach dem Zurueck weiter das Alte behauptet.
 var MATCH_SNAP = ["players","currentIdx","currentTurn","turnStartScore",
-                  "finished","winnerId","legNo","startIdx","legs","lastTurn"];
+                  "finished","winnerId","legNo","startIdx","legs","lastTurn","platz"];
 function snapshot(){
   var m = state.match, o = {};
   for(var i=0;i<MATCH_SNAP.length;i++) o[MATCH_SNAP[i]] = m[MATCH_SNAP[i]];
@@ -685,9 +691,20 @@ function endTurn(kind){
   closeTurn(kind);
   sayLastTurn();
   m.currentTurn = [];
-  m.currentIdx = (m.currentIdx+1) % m.players.length;
+  m.currentIdx = naechsterDran(m);
   m.turnStartScore = m.players[m.currentIdx].score;
   curMult = 1;
+}
+
+// Wer sein Spiel schon ausgemacht hat, kommt nicht mehr dran - sonst wuerde der
+// Sieger beim Ausspielen von Platz 2 weiter mitwerfen.
+function naechsterDran(m){
+  var n = m.players.length, i = m.currentIdx;
+  for(var k=0;k<n;k++){
+    i = (i+1) % n;
+    if(!m.platz || m.platz.indexOf(m.players[i].id) < 0) return i;
+  }
+  return m.currentIdx;
 }
 
 function bust(){
@@ -698,8 +715,33 @@ function bust(){
 }
 
 // Leg gewonnen: Zwischenstand oder Matchende. Der Anwurf wechselt jedes Leg.
+// Bei einem Leg und mindestens drei Leuten wird danach um Platz 2 weitergespielt -
+// sonst sitzt der Abgehaengte nur da und schaut zu.
 function winLeg(p){
   var m = state.match;
+  if(!m.platz) m.platz = [];
+
+  var platzSpiel = (m.bestOf||1)===1 && m.players.length>=3
+                   && state.settings.platzSpiel !== false;
+  if(platzSpiel){
+    if(m.platz.indexOf(p.id)<0) m.platz.push(p.id);
+    var offen = m.players.filter(function(q){ return m.platz.indexOf(q.id)<0; });
+    if(offen.length>=2){
+      // Es geht weiter: der Sieger steht fest, die anderen spielen um Platz 2.
+      m.winnerId = m.platz[0];
+      m.currentIdx = m.players.indexOf(offen[0]);
+      m.currentTurn = []; m.turnStartScore = offen[0].score;
+      m.lastTurn = null; curMult = 1;
+      view = "platz";
+      return;
+    }
+    // Nur noch einer uebrig - der bekommt den letzten Platz, Schluss.
+    if(offen.length===1) m.platz.push(offen[0].id);
+    p.legsWon = Math.max(p.legsWon, 0);
+    m.finished = true; m.winnerId = m.platz[0]; view = "win";
+    return;
+  }
+
   p.legsWon++;
   m.legs.push({no:m.legNo, winnerId:p.id, darts:p.legDarts});
   if(p.legsWon >= legsNeeded(m)){
@@ -741,10 +783,11 @@ function applyDart(mult, num){
   if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Leg ausgemacht
     var finishFrom = m.turnStartScore;
     p.score = 0;
-    closeTurn(legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
+    closeTurn((m.bestOf||1)>1 && legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
     if(finishFrom > (p.checkout||0)) p.checkout = finishFrom;
     winLeg(p);
-    save(); render(); return m.finished ? "win" : "leg";
+    save(); render();
+    return m.finished ? "win" : (view==="platz" ? "platz" : "leg");
   }
   // Bust: unter 0, oder (Doppel-Out) genau 1, oder 0 ohne Doppel
   if(ns<0 || (m.doubleOut && ns===1) || (ns===0 && m.doubleOut && !dv.isDouble)){
@@ -763,7 +806,7 @@ function finishMatch(){
     rec = {
       id:m.id, ts:m.ts, ended:Date.now(), mode:m.mode, gameType:m.gameType,
       doubleOut:m.doubleOut, doubleIn:m.doubleIn, bestOf:m.bestOf, winnerId:m.winnerId,
-      legs:m.legs.slice(),
+      legs:m.legs.slice(), platz:(m.platz||[]).slice(),
       players:m.players.map(function(p){
         return {id:p.id, name:p.name, legsWon:p.legsWon, darts:p.darts, scored:p.scored,
                 best:p.best, tons:p.tons, oneEighties:p.oneEighties, checkout:p.checkout,
@@ -1131,11 +1174,12 @@ function applyTurnSum(sum, dartsUsed, opened){
 
   if(ns===0){
     p.score = 0;
-    closeTurn(legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
+    closeTurn((m.bestOf||1)>1 && legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
     if(m.turnStartScore > (p.checkout||0)) p.checkout = m.turnStartScore;
     sayLastTurn();
     winLeg(p);
-    save(); render(); return m.finished ? "win" : "leg";
+    save(); render();
+    return m.finished ? "win" : (view==="platz" ? "platz" : "leg");
   }
   if(ns<0 || (m.doubleOut && ns===1)){
     bust(); save(); render(); return "bust";
@@ -1276,10 +1320,42 @@ function renderLeg(){
   return h()
     + '<div class="win" style="padding:22px 0 6px"><div class="trophy">&#127919;</div>'
     + '<h2>'+esc(w?w.name:"?")+' holt Leg '+(last?last.no:"")+'</h2>'
-    + '<div class="sub">'+(last?last.darts:0)+' Darts &middot; erst bei '+legsNeeded(m)+' Legs ist Schluss</div></div>'
+    + '<div class="sub">'+(last?last.darts:0)+((last&&last.darts===1)?' Dart':' Darts')
+      + ' &middot; erst bei '+legsNeeded(m)+' Legs ist Schluss</div></div>'
     + '<div class="card" style="margin-bottom:14px">'+stand+'</div>'
     + '<button class="btn primary" data-act="nextleg">Leg '+m.legNo+' starten &#8594;</button>'
     + '<button class="btn ghost sm" data-act="undo" style="width:auto;margin:10px auto 0">&#8630; Doch nicht &ndash; letzten Dart zurück</button>';
+}
+
+// Zwischenstand beim Ausspielen: einer ist durch, die anderen machen weiter.
+function renderPlatz(){
+  var m = state.match;
+  var durch = m.platz.map(function(id){ return m.players.find(function(p){return p.id===id;}); });
+  var offen = m.players.filter(function(p){ return m.platz.indexOf(p.id)<0; });
+  var letzter = durch[durch.length-1];
+  var naechsterPlatz = m.platz.length + 1;
+
+  var liste = durch.map(function(p,i){
+    return '<div class="rank"><div class="pos'+(i===0?" gold":"")+'">'+(i+1)+'</div>'
+      + '<div class="nm">'+esc(p.name)+'</div>'
+      + '<div class="wins">'+p.darts+'<small>'+(p.darts===1?'Dart':'Darts')+'</small></div></div>';
+  }).join("")
+  + offen.map(function(p){
+    return '<div class="rank"><div class="pos">&middot;</div>'
+      + '<div class="nm muted">'+esc(p.name)+'</div>'
+      + '<div class="wins muted">'+p.score+'<small>Rest</small></div></div>';
+  }).join("");
+
+  return h()
+    + '<div class="win" style="padding:22px 0 6px"><div class="trophy">&#127942;</div>'
+    + '<h2>'+esc(letzter.name)+' ist durch</h2>'
+    + '<div class="sub">'+letzter.darts+(letzter.darts===1?' Dart':' Darts')
+      + ' &middot; jetzt geht es um <b>Platz '
+      + naechsterPlatz+'</b></div></div>'
+    + '<div class="card" style="margin-bottom:14px">'+liste+'</div>'
+    + '<button class="btn primary" data-act="nextplatz">Weiter um Platz '+naechsterPlatz+' &#8594;</button>'
+    + '<button class="btn ghost sm" data-act="platzende" style="width:auto;margin:10px auto 0">'
+      + 'Reicht &ndash; Ergebnis eintragen</button>';
 }
 
 function renderWin(){
@@ -1569,6 +1645,18 @@ function importText(txt){
   return null;
 }
 
+// Safari raeumt localStorage nach sieben Tagen ohne Besuch ab - ausser die Seite
+// wurde auf den Home-Bildschirm gelegt. Genau der Fall "einmal die Woche spielen".
+function istSafariOhneInstall(){
+  try{
+    var ua = navigator.userAgent || "";
+    var safari = /Safari/.test(ua) && !/Chrome|Chromium|Android|Edg/.test(ua);
+    var install = (window.navigator && window.navigator.standalone) ||
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    return safari && !install;
+  }catch(e){ return false; }
+}
+
 function renderSettings(){
   var st = state.settings;
   function seg3(act, val, opts){
@@ -1614,6 +1702,11 @@ function renderSettings(){
     +   '<button class="btn" data-act="s_import">&#11014;&#65039;&nbsp; Sicherung einspielen</button>'
     + '</div>'
     + '<input type="file" id="impFile" accept="application/json,.json" style="display:none">'
+    + (istSafariOhneInstall()
+        ? '<div class="warnzeile">&#9888;&#65039; In Safari löscht das iPhone gespeicherte Daten '
+          + '<b>nach 7 Tagen ohne Besuch</b>. Über „Zum Home-Bildschirm" installiert bleibt alles '
+          + 'liegen &ndash; sonst regelmäßig sichern.</div>'
+        : '')
     + '<div class="hint" style="text-align:left">'
       + (speicherKaputt
          ? '<b style="color:var(--red)">Dieses Gerät speichert gerade nichts.</b> Alles, was du '
@@ -1955,11 +2048,13 @@ function renderPlayer(){
 }
 
 function render(){
-  if(view!=="game" && view!=="leg" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Legs an
+  if(view!=="game" && view!=="leg" && view!=="platz"
+     && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Runden an
   var el = document.getElementById("app");
   var html;
   if(view==="game" && state.match && !state.match.finished) html = renderGame();
   else if(view==="leg" && state.match && !state.match.finished) html = renderLeg();
+  else if(view==="platz" && state.match && !state.match.finished) html = renderPlatz();
   else if(view==="win" && state.match && state.match.finished) html = renderWin();
   else if(view==="roster") html = renderRoster();
   else if(view==="h2h") html = renderH2H();
@@ -1983,6 +2078,7 @@ function render(){
     : '') + html;
   window.scrollTo(0,0);
   if(view==="game") updateVoiceStatus();
+  bildschirmWach(LIVE_VIEWS.indexOf(view)>=0);
 }
 
 // ---------------------------------------------------------------------------
@@ -2154,9 +2250,9 @@ function applySpokenResultInner(p, rawTxt){
   var m=state.match; if(!m || m.finished) return;
   // Zwischen zwei Legs bleibt das Mikro absichtlich an. Ein Wurf darf dann aber
   // nicht ins naechste Leg rutschen, waehrend auf dem Schirm noch der Zwischenstand steht.
-  if(view==="leg" && !(p.cmd==="skip" || p.cmd==="stop" || p.cmd==="undo")){
-    updateVoiceStatus('Leg ist zu Ende &ndash; sag „weiter“ für das nächste.');
-    say("Leg ist zu Ende. Sag weiter."); return;
+  if((view==="leg" || view==="platz") && !(p.cmd==="skip" || p.cmd==="stop" || p.cmd==="undo")){
+    updateVoiceStatus('Runde ist zu Ende &ndash; sag „weiter“.');
+    say("Runde ist zu Ende. Sag weiter."); return;
   }
   if(p.cmd && p.throws.length===0){
     if(p.cmd==="undo"){
@@ -2165,7 +2261,10 @@ function applySpokenResultInner(p, rawTxt){
       return;
     }
     if(p.cmd==="skip"){
-      if(view==="leg"){ view="game"; render(); updateVoiceStatus("&#8594; Leg "+m.legNo); say("Leg "+m.legNo); return; }
+      if(view==="leg" || view==="platz"){
+        view="game"; save(); render();
+        updateVoiceStatus("&#8594; weiter"); say("Weiter"); return;
+      }
       snapshot(); endTurn(); save(); render(); updateVoiceStatus("&#8594; nächster Spieler"); say("Nächster"); return;
     }
     if(p.cmd==="stop"){ stopVoice(); render(); return; }
@@ -2310,6 +2409,13 @@ document.getElementById("app").addEventListener("click", function(ev){
     render(); return;
   }
   if(act==="nextleg"){ view="game"; render(); return; }
+  if(act==="nextplatz"){ view="game"; save(); render(); return; }
+  if(act==="platzende"){
+    // Abbrechen: der Rest bleibt ohne Platz, das Ergebnis wird trotzdem gebucht.
+    var m0 = state.match;
+    m0.finished = true; m0.winnerId = m0.platz[0];
+    view = "win"; save(); render(); return;
+  }
 
   // Allein üben
   if(act==="solowho"){ soloWho=t.getAttribute("data-id"); render(); return; }
@@ -2523,6 +2629,30 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
 
 view = restoreView();        // jetzt ist alles definiert, was restoreView prueft
 render();
+
+// Bildschirm anlassen, solange gespielt wird. Zwischen zwei Aufnahmen vergehen
+// leicht zwei Minuten, in denen niemand das Handy anfasst.
+var wachHalter = null;
+function bildschirmWach(an){
+  try{
+    if(!navigator.wakeLock) return;
+    if(an && !wachHalter){
+      navigator.wakeLock.request("screen").then(function(w){
+        wachHalter = w;
+        w.addEventListener("release", function(){ wachHalter = null; });
+      }).catch(function(){});
+    } else if(!an && wachHalter){
+      wachHalter.release().catch(function(){});
+      wachHalter = null;
+    }
+  }catch(e){}
+}
+if(typeof document.addEventListener === "function"){
+  document.addEventListener("visibilitychange", function(){
+    // Nach dem Zurueckwechseln ist die Sperre weg - neu anfordern.
+    if(!document.hidden && LIVE_VIEWS.indexOf(view)>=0) bildschirmWach(true);
+  });
+}
 
 // Ein zweites offenes Fenster (PWA neben Safari-Tab) schreibt denselben
 // Schluessel. Ohne dieses Ohr ueberschreibt der eine Stand den anderen lautlos.
