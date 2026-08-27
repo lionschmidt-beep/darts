@@ -258,9 +258,10 @@
   .duel .dnb{text-align:right;}
   .duel .ds{font-size:17px; font-weight:800; flex:none; letter-spacing:.5px;}
   .duel .ds i{font-style:normal; color:var(--muted); margin:0 3px; font-weight:600;}
+  .duelfuss{font-size:11.5px; color:var(--muted); padding:9px 2px 2px; line-height:1.4;}
   .duel .ds .va{color:var(--accent);} .duel .ds .vb{color:var(--accent2);}
   .duel.la .dna{color:var(--accent);} .duel.lb .dnb{color:var(--accent2);}
-  .duel.behind .dna{color:var(--accent2);}   /* in der Akte steht nur ein Name */
+  .duel .ds .va{color:var(--accent);} .duel .ds .vb{color:var(--muted);}
 
   .fab{margin-top:8px;}
   .hint{font-size:12px; color:var(--muted); text-align:center; margin-top:14px;}
@@ -277,7 +278,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.14";
+var VER    = "1.15";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -719,16 +720,44 @@ function finishMatch(){
     state.history.unshift(rec);
     // Deckeln, aber nichts unterschlagen: der aelteste Sieg wird eingefroren,
     // sonst sinkt die Rangliste beim 501. Spiel stillschweigend.
-    while(state.history.length>500){
-      var drop = state.history.pop();
-      if(drop && drop.players && drop.players.length>=2 && drop.winnerId){
-        var rr = rosterOf(drop.winnerId);
-        if(rr) rr.winsManual = (rr.winsManual||0)+1;
-      }
-    }
+    capHistory();
   }
   state.match = null; save();
   return rec;
+}
+
+// Alte Spiele wegwerfen, aber nichts unterschlagen: der Sieg wandert in den
+// Handeintrag, und der beste Solo-Lauf je Startwert bleibt stehen - sonst
+// verschwindet ein Rekord, den die App zwei Zeilen weiter noch anzeigt.
+function capHistory(){
+  if(state.history.length<=500) return;
+  var behalten = state.history.slice(0,500);
+  var drin = {};
+  behalten.forEach(function(m){ drin[m.id] = true; });
+  var rest = state.history.slice(500);
+  var beste = {};
+  rest.forEach(function(m){
+    if(!m.players || m.players.length!==1) return;
+    var p = m.players[0]; if(!p.darts) return;
+    var k = p.id+"|"+m.gameType;
+    if(!beste[k] || p.darts < beste[k].players[0].darts) beste[k] = m;
+  });
+  rest.forEach(function(m){
+    if(m.players && m.players.length>=2 && m.winnerId){
+      var rr = rosterOf(m.winnerId);
+      if(rr) rr.winsManual = (rr.winsManual||0)+1;
+    }
+  });
+  for(var k2 in beste){
+    var b = beste[k2];
+    // Nur behalten, wenn es kein besseres unter den behaltenen gibt.
+    var besser = behalten.some(function(m){
+      return m.players && m.players.length===1 && m.players[0].id===b.players[0].id
+        && m.gameType===b.gameType && m.players[0].darts && m.players[0].darts <= b.players[0].darts;
+    });
+    if(!besser && !drin[b.id]) behalten.push(b);
+  }
+  state.history = behalten;
 }
 
 // Wins von Hand aendern: der Handeintrag ist ein Offset auf die gespielten Siege.
@@ -770,8 +799,14 @@ function h(){ return '<header><span class="logo">&#127919;</span><h1>Darts</h1>'
 // Die zuletzt gespielten Paarungen direkt auf der Startseite - eine Zeile je
 // Duell, tippen fuehrt in den Direktvergleich.
 function duelCard(){
-  var d = allDuels().slice(0,4);
-  if(!d.length) return '';
+  var alle = allDuels();
+  var d = alle.slice(0,4);
+  // Runden mit mehr als zwei Leuten zaehlen in die Rangliste, tauchen hier aber
+  // in keiner Zeile auf. Ohne diese Zahl passt die Rangliste nicht zur Karte.
+  var mehr = 0;
+  for(var i=0;i<state.history.length;i++)
+    if(state.history[i].players && state.history[i].players.length>2) mehr++;
+  if(!d.length && !mehr) return '';
   var rows = d.map(function(x){
     var lead = x.winsA===x.winsB ? "" : (x.winsA>x.winsB ? " la" : " lb");
     return '<div class="duel'+lead+'" data-act="h2hopen" data-a="'+x.a+'" data-b="'+x.b+'">'
@@ -780,10 +815,16 @@ function duelCard(){
       + '<span class="dn dnb">'+esc(nameOf(x.b))+'</span>'
       + '</div>';
   }).join("");
+  var fuss = "";
+  if(alle.length > d.length)
+    fuss += '<div class="duelfuss">+ '+(alle.length-d.length)+' weitere Duelle</div>';
+  if(mehr)
+    fuss += '<div class="duelfuss">Dazu '+mehr+' Runden mit mehr Leuten &ndash; '
+      + 'die zählen in die Rangliste, aber in kein Duell.</div>';
   return '<div class="card" style="margin-bottom:14px">'
     + '<div class="cardhead"><span>DUELLE</span>'
     +   '<span data-act="nav" data-view="h2h" style="font-weight:600">alle &rsaquo;</span></div>'
-    + rows + '</div>';
+    + rows + fuss + '</div>';
 }
 
 function renderHome(){
@@ -1689,19 +1730,27 @@ function renderTrain(){
 // ---------------------------------------------------------------------------
 function playerStats(id){
   var r = {id:id, games:0, wins:0, legsWon:0, legsLost:0, darts:0, scored:0,
-           best:0, checkout:0, t180:0, tons:0, form:[], solo:0, soloBest:null};
+           best:0, checkout:0, t180:0, tons:0, form:[],
+           solo:0, soloDarts:0, soloScored:0, soloBest:0};
   for(var i=0;i<state.history.length;i++){
     var m = state.history[i];
     var p = null;
     for(var j=0;j<m.players.length;j++) if(m.players[j].id===id) p = m.players[j];
     if(!p) continue;
 
+    // Allein gespielt zaehlt separat - sonst stehen im selben Screen
+    // "1 Spiel" und ein Schnitt aus zwei Partien.
+    if(m.players.length<2){
+      r.solo++;
+      r.soloDarts += p.darts||0; r.soloScored += p.scored||0;
+      if((p.best||0) > r.soloBest) r.soloBest = p.best||0;
+      continue;
+    }
+
     r.darts += p.darts||0; r.scored += p.scored||0;
     if((p.best||0) > r.best) r.best = p.best||0;
     if((p.checkout||0) > r.checkout) r.checkout = p.checkout||0;
     r.t180 += p.oneEighties||0; r.tons += p.tons||0;
-
-    if(m.players.length<2){ r.solo++; continue; }        // allein gespielt zaehlt separat
     r.games++;
     r.legsWon += p.legsWon||0;
     for(var k=0;k<m.players.length;k++) if(m.players[k].id!==id) r.legsLost += m.players[k].legsWon||0;
@@ -1733,10 +1782,13 @@ function renderPlayer(){
     var other = d.a===p.id ? d.b : d.a;
     var mine  = d.a===p.id ? d.winsA : d.winsB;
     var his   = d.a===p.id ? d.winsB : d.winsA;
-    var lead  = mine===his ? "" : (mine>his ? " la" : " behind");
+    // Die Klasse faerbt .dna - und dort steht hier der GEGNER. Also bekommt sie
+    // der Gegner, wenn ER fuehrt; sonst waere Gruen in der Akte der Verlierer.
+    var lead  = mine===his ? "" : (his>mine ? " la" : "");
     return '<div class="duel'+lead+'" data-act="h2hopen" data-a="'+p.id+'" data-b="'+other+'">'
       + '<span class="dn dna">gegen '+esc(nameOf(other))+'</span>'
-      + '<span class="ds"><b class="va">'+mine+'</b><i>:</i><b class="vb">'+his+'</b></span>'
+      + '<span class="ds"><b class="'+(mine>=his?"va":"vb")+'">'+mine+'</b><i>:</i>'
+      +   '<b class="'+(his>mine?"va":"vb")+'">'+his+'</b></span>'
       + '<span class="dn dnb" style="flex:0"> </span></div>';
   }).join("");
 
@@ -1769,6 +1821,10 @@ function renderPlayer(){
     +   (s.t180 ? row("180er", s.t180) : '')
     +   (s.legsWon+s.legsLost ? row("Legs", s.legsWon+' : '+s.legsLost) : '')
     + '</div>'
+    + (s.solo ? '<div class="infoline">Dazu <b>'+s.solo+'</b> Runden allein &middot; Schnitt '
+        + (s.soloDarts ? (s.soloScored/s.soloDarts*3).toFixed(1) : '0.0')
+        + (s.soloBest ? ' &middot; beste Aufnahme '+s.soloBest : '')
+        + ' <span class="muted">(zählen nicht in die Zahlen oben)</span></div>' : '')
     + '<label class="lbl" style="margin-top:16px">Form</label>' + form
     + (duels ? '<label class="lbl" style="margin-top:16px">Duelle</label>'
              + '<div class="card">'+duels+'</div>' : '')
@@ -2221,8 +2277,8 @@ document.getElementById("app").addEventListener("click", function(ev){
     render(); return;
   }
   if(act==="h2hopen"){
-    h2hSel=[t.getAttribute("data-a"), t.getAttribute("data-b")]; h2hAuto=false;
-    view="h2h"; render(); return;
+    h2hSel = orderPair(t.getAttribute("data-a"), t.getAttribute("data-b"));
+    h2hAuto=false; view="h2h"; render(); return;
   }
   if(act==="duelstart"){
     if(h2hSel.length!==2) return;

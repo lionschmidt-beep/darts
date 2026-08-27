@@ -875,15 +875,16 @@ t("playerStats zaehlt Spiele, Siege und Quote", () => {
   eq(s.form, [false, true, true], "neueste zuerst - das letzte Spiel ging verloren");
 });
 
-t("Solo-Spiele zaehlen nicht in die Quote, aber in den Schnitt", () => {
+t("Solo-Spiele stehen getrennt von den Duell-Zahlen", () => {
   const { D } = boot();
   playMatch(D, ["lion"], 0);
   playMatch(D, ["lion"], 0);
   const s = D.playerStats("lion");
   eq(s.games, 0, "keine Gegner, keine Bilanz");
-  eq(s.solo, 2);
+  eq(s.solo, 2, "aber zwei Solo-Runden");
   eq(s.quote, 0);
-  ok(s.darts > 0, "Wuerfe zaehlen trotzdem");
+  eq(s.darts, 0, "die Duell-Zahlen bleiben unberuehrt");
+  ok(s.soloDarts > 0, "die Solo-Wuerfe stehen in eigenen Feldern");
 });
 
 t("Legs werden fuer und gegen gezaehlt", () => {
@@ -2039,6 +2040,120 @@ t("Die Zwischenablage meldet keinen Erfolg, den es nicht gab", () => {
     ok(!/In der Zwischenablage/i.test(ctx.app.innerHTML),
        "aber nicht als Erfolg gemeldet");
   });
+});
+
+// ================================================================ Zahlen, die zusammenpassen
+t("Die Akte oeffnet das Duell nicht gespiegelt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "justus"], 0);
+  playMatch(D, ["lion", "justus"], 0);
+  playMatch(D, ["lion", "justus"], 1);
+  // Von der Startseite aus
+  D.setView("home"); D.render();
+  ctx.click("h2hopen", { "data-a": "lion" });
+  const vonHome = duellNamen(ctx);
+  eq(vonHome, ["Lion", "Justus"]);
+  // Aus Justus' Akte heraus
+  D.setPlayerSel("justus"); D.setView("player"); D.render();
+  ctx.click("h2hopen", { "data-b": "lion" });
+  eq(duellNamen(ctx), vonHome,
+     "gleiche Bilanz, gleiche Seiten - egal von wo man kommt");
+});
+
+t("Der Anwurf haengt nicht davon ab, wo man das Duell geoeffnet hat", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "justus"], 0);
+  D.setPlayerSel("justus"); D.setView("player"); D.render();
+  ctx.click("h2hopen", { "data-b": "lion" });
+  ctx.click("duelstart");
+  eq(D.getMatch().players[0].id, "lion",
+     "der Marker-Spieler wirft an, nicht wer die Akte gerade offen hatte");
+});
+
+t("Gruen heisst ueberall 'fuehrt'", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "justus"], 0);
+  playMatch(D, ["lion", "justus"], 0);
+  playMatch(D, ["lion", "justus"], 1);            // Lion 2:1 Justus
+  // In Lions Akte: er fuehrt, also darf der Gegner nicht gruen sein
+  D.setPlayerSel("lion"); D.setView("player"); D.render();
+  const zeileLion = (ctx.app.innerHTML.match(/<div class="duel[^"]*"[^>]*>[\s\S]*?gegen Justus[\s\S]*?<\/div>/) || [""])[0];
+  ok(!/duel la/.test(zeileLion),
+     "Lion fuehrt - die Zeile darf den Verlierer nicht gruen faerben: " +
+     (zeileLion.match(/class="([^"]*)"/) || [])[1]);
+  // In Justus' Akte: er liegt zurueck
+  D.setPlayerSel("justus"); D.setView("player"); D.render();
+  const zeileJustus = (ctx.app.innerHTML.match(/<div class="duel[^"]*"[^>]*>[\s\S]*?gegen Lion[\s\S]*?<\/div>/) || [""])[0];
+  ok(/duel la/.test(zeileJustus),
+     "aus Justus' Sicht fuehrt Lion - der gehoert gruen: " +
+     (zeileJustus.match(/class="([^"]*)"/) || [])[1]);
+});
+
+t("Solo-Partien verfaelschen die Duell-Statistik der Akte nicht", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  // ein echtes Duell mit bescheidenen Zahlen
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20"); D.finishMatch();
+  // dann eine Solo-Runde mit 180 und hohem Finish
+  D.startMatch(["lion"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["T20", "T20", "T20"]);
+  D.setScore(0, 170); seq(D, ["T20", "T20", "BULL"]);
+  D.finishMatch();
+  const s2 = D.playerStats("lion");
+  eq(s2.games, 1, "nur das Duell zaehlt als Spiel");
+  eq(s2.best, 40, "und nur dessen Werte stehen in den Duell-Zahlen (war: " + s2.best + ")");
+  eq(s2.t180, 0, "der 180er aus dem Solo gehoert nicht hierher");
+  eq(s2.solo, 1, "die Solo-Runde wird separat gezaehlt");
+});
+
+t("Runden zu dritt tauchen auf der Startseite auf, nicht nur in der Rangliste", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 1);              // Arne gewinnt das Duell
+  playMatch(D, ["lion", "arne", "justus"], 1);    // und eine Dreierrunde
+  playMatch(D, ["lion", "arne", "justus"], 1);
+  eq(D.totalWins("arne"), 6, "3 von Hand + 3 gespielt");
+  D.setView("home"); D.render();
+  ok(/mehr Leuten|Runden|zu dritt/i.test(ctx.app.innerHTML),
+     "sonst steht Arne auf 6, und die Duellzeile darunter erklaert nur einen davon");
+});
+
+t("Mehr als vier Duelle werden nicht stillschweigend abgeschnitten", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  ["a", "b", "c", "d", "e"].forEach(n => D.getState().roster.push(
+    { id: n, name: "Spieler " + n.toUpperCase(), winsManual: 0, guest: false }));
+  ["a", "b", "c", "d", "e"].forEach(n => playMatch(D, ["lion", n], 0));
+  eq(D.allDuels().length, 5);
+  D.setView("home"); D.render();
+  const zeilen = (ctx.app.innerHTML.match(/data-act="h2hopen"/g) || []).length;
+  ok(zeilen < 5, "die Karte zeigt bewusst nicht alle");
+  ok(/weitere/i.test(ctx.app.innerHTML),
+     "dann muss dastehen, dass es mehr sind (" + zeilen + " von 5 sichtbar)");
+});
+
+t("Ein Solo-Rekord faellt nicht hinten aus der Historie", () => {
+  const { D } = boot();
+  const st = D.getState();
+  st.history = [];
+  // aeltester Eintrag ist der Rekord
+  st.history.push({ id: "rek", ts: 1, ended: 1, gameType: 501, bestOf: 1, winnerId: "lion",
+    players: [{ id: "lion", name: "Lion", legsWon: 1, darts: 9, scored: 501, avg: 167 }] });
+  for (let i = 0; i < 499; i++) {
+    st.history.unshift({ id: "f" + i, ts: 100 + i, ended: 100 + i, gameType: 501, bestOf: 1,
+      winnerId: "lion",
+      players: [{ id: "lion", name: "Lion", legsWon: 1, darts: 30, scored: 501, avg: 50 },
+                { id: "arne", name: "Arne", legsWon: 0, darts: 30, scored: 200, avg: 20 }] });
+  }
+  eq(D.bestSolo("lion", 501).darts, 9, "der Rekord steht");
+  playMatch(D, ["lion", "arne"], 0);              // schiebt den aeltesten raus
+  ok(D.bestSolo("lion", 501), "es gibt noch einen Solo-Rekord");
+  eq(D.bestSolo("lion", 501).darts, 9,
+     "und es ist derselbe - ein Rekord darf nicht vom Deckel gefressen werden");
 });
 
 // ---------------------------------------------------------------- Ausgabe
