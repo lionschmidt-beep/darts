@@ -1207,6 +1207,15 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
   ctx.click("sumkey", { "data-k": 0 });
   ctx.click("sumkey", { "data-k": "ok" }); sammle();               // sumopen/sumcancel
   ctx.click("sumcancel");
+
+  // Ueberworfene Summe -> Dartzahl-Frage (sumbustd)
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 20); D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" }); sammle();
+  ctx.click("sumcancel");
+  D.finishMatch();
   D.getState().settings.inputMode = "single";
 
   // Laufendes Training: auf Home und im Screen
@@ -1600,7 +1609,10 @@ t("Eine zu hohe Summe ist ueberworfen, keine negative Zahl", () => {
   const D = ctx.D;
   D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
   D.setScore(0, 40);
-  eq(D.applyTurnSum(60), "bust");
+  // Ohne Dartzahl fragt die App erst - sonst waere der Schnitt geraten.
+  eq(D.applyTurnSum(60), "bustfrage");
+  eq(D.getMatch().players[0].darts, 0, "vorher wird nichts gebucht");
+  eq(D.applyTurnSum(60, 3), "bust");
   eq(D.getMatch().players[0].score, 40, "zurueck auf den Stand vor der Aufnahme");
   eq(D.getMatch().players[0].scored, 0, "nichts gutgeschrieben");
   eq(D.getMatch().players[0].darts, 3, "die Darts zaehlen fuer den Schnitt");
@@ -1611,8 +1623,10 @@ t("Rest 1 ist auch bei Summen-Eingabe ueberworfen", () => {
   const D = ctx.D;
   D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
   D.setScore(0, 41);
-  eq(D.applyTurnSum(40), "bust");
+  eq(D.applyTurnSum(40), "bustfrage", "auch hier wird erst gefragt");
+  eq(D.applyTurnSum(40, 2), "bust");
   eq(D.getMatch().players[0].score, 41);
+  eq(D.getMatch().players[0].darts, 2, "und die genannte Dartzahl wird uebernommen");
 });
 
 t("Unmoegliche Summen werden abgewiesen, nicht gebucht", () => {
@@ -2851,6 +2865,18 @@ t("Die Spielerkarten koennen schrumpfen", () => {
   ok(pn && /text-overflow:\s*ellipsis/.test(pn[1]), "und der Name wird gekuerzt");
 });
 
+t("Die Zahlenzeile der Spielerkarte schneidet nichts ab", () => {
+  // Im Browser gemessen: mit white-space:nowrap frisst die Ellipsis als erstes
+  // die Legs-Zahl ganz rechts - in ALLEN Konstellationen ab drei Spielern.
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const meta = css.match(/\.pcard \.pmeta\{([^}]*)\}/);
+  ok(meta, ".pcard .pmeta gefunden");
+  ok(!/white-space:\s*nowrap/.test(meta[1]),
+     "nowrap schneidet die Legs-Zahl ab: " + meta[1]);
+  ok(!/text-overflow:\s*ellipsis/.test(meta[1]),
+     "und die Ellipsis frisst sie ganz: " + meta[1]);
+});
+
 t("Lange Namen brechen die Textzeilen nicht auf", () => {
   const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
   ["\.legline", "\.lastturn"].forEach(sel => {
@@ -2859,6 +2885,200 @@ t("Lange Namen brechen die Textzeilen nicht auf", () => {
     ok(/overflow-wrap:\s*anywhere/.test(r[1]),
        sel + " braucht einen Umbruch fuer lange Namen: " + r[1]);
   });
+});
+
+// ================================================================ Kritiker-Runde 2
+t("Der Sieg-Screen zeigt die ausgespielte Reihenfolge", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  // Bewusst NICHT der erste Spieler gewinnt - sonst waere die Sortierung von
+  // der Sitzordnung nicht zu unterscheiden und der Test blind.
+  D.endTurn(); D.endTurn();                          // Justus (Index 2) ist dran
+  eq(D.getMatch().players[D.getMatch().currentIdx].id, "justus");
+  D.setScore(2, 40); throwDart(D, "D20");            // Justus: Platz 1
+  ctx.click("nextplatz");
+  const i2 = D.getMatch().currentIdx;
+  const zweiter = D.getMatch().players[i2].name;
+  D.setScore(i2, 40); throwDart(D, "D20");           // Platz 2
+  D.render();
+  const html = ctx.app.innerHTML;
+  // Die Platz-Spalte gezielt: "1." mit dem Wort Platz darunter
+  ok(/>1\.<small>Platz<\/small>/.test(html),
+     "die Platzierung muss in der Zahlenspalte stehen, nicht Legs");
+  const namen = (html.match(/<div class="nm">([^<]+)</g) || []).map(x => x.slice(16, -1));
+  eq(namen[0], "Justus", "der Sieger oben, obwohl er hinten sass (war: " + namen.join(",") + ")");
+  eq(namen[1], zweiter, "dann der Zweite");
+  eq(namen[2], D.getMatch().players.find(p => p.name !== "Justus" && p.name !== zweiter).name,
+     "und zuletzt der Dritte");
+});
+
+t("Ein Single auf 20 macht auch im Summen-Modus nicht aus", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 20);
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 2 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  // Die App kann nicht wissen, ob 20 = D10 oder Single 20 war - sie muss fragen
+  ok(ctx.has("sumfin", { "data-d": 1 }), "die Dartzahl-Frage kommt");
+  ok(/Doppel|überworfen/i.test(ctx.app.innerHTML),
+     "und bei Doppel-Out muss sie klaeren, ob es ein Doppel war");
+});
+
+t("Kein Doppel heisst ueberworfen, auch bei Summen-Eingabe", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 20);
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 2 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  const bustKnopf = ctx.classOf("sumbust") || "";
+  ok(/btn/.test(bustKnopf) && !/display:none/.test(ctx.app.innerHTML.match(/data-act="sumbust"[^>]*/)[0]),
+     "der Weg 'war kein Doppel' muss auch sichtbar sein. Klasse: '" + bustKnopf + "'");
+  ctx.click("sumbust");
+  eq(D.getMatch().finished, false, "kein Sieg");
+  eq(D.getMatch().players[0].score, 20, "zurueck auf den Stand vor der Aufnahme");
+  eq(D.getMatch().currentIdx, 1, "der Naechste ist dran");
+});
+
+t("Ueber den Zehnerblock fragt die App nach der Dartzahl des Busts", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 20);
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });           // 60 auf Rest 20 -> ueberworfen
+  ok(ctx.has("sumbustd", { "data-d": 1 }), "die Frage kommt");
+  eq(D.getMatch().players[0].darts, 0, "vorher wird nichts gebucht");
+  ctx.click("sumbustd", { "data-d": 1 });
+  eq(D.getMatch().players[0].darts, 1, "nur der eine geworfene Dart");
+  eq(D.getMatch().players[0].score, 20, "Stand unveraendert");
+  eq(D.getMatch().currentIdx, 1, "der Naechste ist dran");
+});
+
+t("Ein Bust kostet im Summen-Modus nicht pauschal drei Darts", () => {
+  const a = boot(), b = boot();
+  a.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  a.D.setScore(0, 20);
+  throwDart(a.D, "19");                              // Bust mit einem Dart
+  const tippen = a.D.getMatch().players[0].darts;
+  b.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b.D.setScore(0, 20);
+  b.D.applyTurnSum(19, 1);                           // derselbe Bust, ein Dart
+  eq(b.D.getMatch().players[0].darts, tippen,
+     "sonst sind die Schnitte zweier Spieler derselben Partie nicht vergleichbar");
+});
+
+t("Die Ansage wird beim Ersetzen des Stands nachgezogen", () => {
+  const A = boot();
+  A.D.getState().settings.tts = false;
+  const json = JSON.stringify(A.D.exportPayload());
+  const ctx = boot();
+  eq(ctx.D.getSettings().tts, true, "vorher an");
+  ctx.D.importText(json);
+  eq(ctx.D.getSettings().tts, false, "Einstellung uebernommen");
+  ctx.gesagt.length = 0;
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  seq(ctx.D, ["20", "20", "20"]);
+  eq(ctx.gesagt.length, 0,
+     "und die App schweigt auch wirklich - sonst widersprechen sich zwei Screens");
+});
+
+t("Nach 'Alles zuruecksetzen' stimmt die Ansage wieder", () => {
+  const ctx = boot();
+  ctx.D.getState().settings.tts = false;
+  ctx.D.resetAll();
+  eq(ctx.D.getSettings().tts, true, "Werkszustand hat die Ansage an");
+  ctx.gesagt.length = 0;
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  seq(ctx.D, ["20", "20", "20"]);
+  ok(ctx.gesagt.length > 0, "also wird auch gesprochen");
+});
+
+t("Der Bildschirm-Wachhalter fordert nicht mehrfach an", () => {
+  const ctx = boot();
+  let offen = 0, angefordert = 0;
+  ctx.win.navigator.wakeLock = {
+    request: () => { angefordert++; return new Promise(r => setTimeout(() => {
+      offen++; r({ release: () => { offen--; return Promise.resolve(); },
+                   addEventListener: () => {} }); }, 5)); },
+  };
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  ctx.D.setView("game");
+  ctx.D.render(); ctx.D.render(); ctx.D.render();     // drei Darts in Folge
+  return new Promise(r => setTimeout(r, 30)).then(() => {
+    eq(angefordert, 1, "nur eine Anforderung, nicht drei (war: " + angefordert + ")");
+    ctx.D.setView("home"); ctx.D.render();
+    return new Promise(r => setTimeout(r, 30));
+  }).then(() => {
+    eq(offen, 0, "und danach ist keine Sperre mehr offen (war: " + offen + ")");
+  });
+});
+
+t("Der Undo-Stapel blaeht den Speicher nicht auf", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  for (let i = 0; i < 60; i++) { D.setScore(D.getMatch().currentIdx, 400); throwDart(D, "20"); }
+  const bytes = ctx.store.get("darts_v2").length;
+  ok(bytes < 30000,
+     "jeder Dart serialisiert den ganzen Stand - " + Math.round(bytes / 1024) + " KB ist zu viel");
+  ok(D.undo(), "Undo geht trotzdem noch");
+});
+
+t("Das Fremdfenster-Band verschwindet, wenn das Spiel vorbei ist", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  throwDart(D, "T20");
+  const horcher = (ctx.events.storage || [])[0];
+  horcher({ key: "darts_v2" });
+  D.render();
+  ok(/zweites offenes Fenster/i.test(ctx.app.innerHTML), "erst steht es da");
+  D.setScore(0, 40); throwDart(D, "D20");
+  D.finishMatch();
+  D.setView("home"); D.render();
+  ok(!/zweites offenes Fenster/i.test(ctx.app.innerHTML),
+     "danach wuerde 'Fremden Stand laden' die gerade gespeicherte Partie verwerfen");
+});
+
+t("Der Platz-Screen hat einen Weg zurueck", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");
+  D.render();
+  ok(ctx.has("undo"), "ein Fehltipp beim Ausmachen muss direkt zurueckzunehmen sein");
+});
+
+t("Die Historie bleibt nach dem Deckeln zeitlich sortiert", () => {
+  const { D } = boot();
+  const st = D.getState();
+  st.history = [];
+  st.history.push({ id: "rek", ts: 1, ended: 1, gameType: 501, bestOf: 1, winnerId: "lion",
+    players: [{ id: "lion", name: "Lion", legsWon: 1, darts: 9, scored: 501, avg: 167 }] });
+  for (let i = 0; i < 499; i++) {
+    st.history.unshift({ id: "f" + i, ts: 1000 + i, ended: 1000 + i, gameType: 501, bestOf: 1,
+      winnerId: "lion",
+      players: [{ id: "lion", name: "Lion", legsWon: 1, darts: 30, scored: 501, avg: 50 },
+                { id: "arne", name: "Arne", legsWon: 0, darts: 30, scored: 200, avg: 20 }] });
+  }
+  playMatch(D, ["lion", "arne"], 0);
+  const h = D.getHistory();
+  let sortiert = true;
+  for (let i = 1; i < h.length; i++)
+    if ((h[i].ended || h[i].ts) > (h[i - 1].ended || h[i - 1].ts)) sortiert = false;
+  ok(sortiert, "sonst steht ein geretteter Rekord mitten in der Zeitreihe");
 });
 
 // ---------------------------------------------------------------- Ausgabe

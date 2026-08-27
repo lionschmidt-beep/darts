@@ -140,8 +140,9 @@
   .pcard.active .pn{color:var(--accent);}
   .pcard .ps{font-size:34px; font-weight:800; line-height:1.05; margin:2px 0;
     overflow:hidden; text-overflow:ellipsis;}
-  .pcard .pmeta{font-size:11px; color:var(--muted); white-space:nowrap;
-    overflow:hidden; text-overflow:ellipsis;}
+  /* Kein nowrap: sonst frisst die Ellipsis als erstes die Legs-Zahl ganz rechts -
+     gemessen in allen Konstellationen ab drei Spielern, also praktisch immer. */
+  .pcard .pmeta{font-size:11px; color:var(--muted); line-height:1.35; overflow-wrap:anywhere;}
   .pcard .arrow{position:absolute; top:-9px; left:50%; transform:translateX(-50%); font-size:12px;}
   .pcard .pmeta .legz{color:var(--gold); font-weight:800;}
   .pcard .pmeta .legz::after{content:" L"; font-weight:600; color:var(--muted);}
@@ -283,12 +284,12 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.20";
+var VER    = "1.21";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
-           tts:true, keepHistory:true, meId:"lion", inputMode:"single" };
+           tts:true, keepHistory:true, meId:"lion", inputMode:"single", platzSpiel:true };
 }
 function defaultState(){
   return {
@@ -460,6 +461,7 @@ var sumInput = "";       // getippte Aufnahme-Summe
 var pendingFinish = null; // Summe, die ausmacht - wartet auf die Dart-Zahl
 var pendingOpen = null;   // Summe bei Doppel-In - wartet auf "war ein Doppel dabei?"
 var sumMsg = "";          // Hinweis am Zehnerblock (abgewiesene Ziffer)
+var pendingBust = null;   // ueberworfene Summe - wartet auf die Dart-Zahl
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -561,6 +563,16 @@ function checkout(score, dartsLeft, doubleOut){
 // ---------------------------------------------------------------------------
 function rosterOf(id){ return state.roster.find(function(p){return p.id===id;}); }
 
+// Wird state komplett ersetzt (Import, Zuruecksetzen, fremdes Fenster), muessen
+// alle Spiegel mitgezogen werden. Sonst sagt der Einstellungs-Screen "Ansage aus"
+// und die App redet trotzdem.
+function standUebernommen(){
+  if(typeof ttsOn !== "undefined") ttsOn = state.settings.tts !== false;
+  h2hSel = null; h2hAuto = true; setupSel = null; playerSel = null; soloWho = null;
+  sumInput = ""; pendingFinish = null; pendingOpen = null; pendingBust = null; sumMsg = "";
+  fremdGeschrieben = false;
+}
+
 // Vor jedem Start: laeuft noch etwas, das sonst kommentarlos verschwindet?
 // Ein gewonnenes, nicht eingetragenes Spiel ist der teuerste Fall - es waere
 // aus Rangliste und Duellbilanz ersatzlos weg.
@@ -638,7 +650,10 @@ function snapshot(){
   var m = state.match, o = {};
   for(var i=0;i<MATCH_SNAP.length;i++) o[MATCH_SNAP[i]] = m[MATCH_SNAP[i]];
   m._undo.push(JSON.stringify(o));
-  if(m._undo.length>80) m._undo.shift();
+  // Der Stapel liegt in state und wird bei jedem Dart mitserialisiert - 80
+  // Schnappschuesse waren gemessen 98 % der gespeicherten Datei (69 KB nach
+  // 120 Darts). 15 Darts Undo-Tiefe reichen praktisch immer.
+  while(m._undo.length>15) m._undo.shift();
 }
 // Rueckgabe: wurde wirklich etwas zurueckgenommen? Ohne die Antwort meldet der
 // Sprachmodus "zurueck" auch dann, wenn der Stapel leer war.
@@ -820,7 +835,9 @@ function finishMatch(){
     // sonst sinkt die Rangliste beim 501. Spiel stillschweigend.
     capHistory();
   }
-  state.match = null; save();
+  state.match = null;
+  fremdGeschrieben = false;   // sonst verwirft "Fremden Stand laden" die eben gebuchte Partie
+  save();
   return rec;
 }
 
@@ -855,6 +872,9 @@ function capHistory(){
     });
     if(!besser && !drin[b.id]) behalten.push(b);
   }
+  // Der gerettete Rekord wird hinten angehaengt - danach wieder nach Zeit
+  // ordnen, sonst steht er mitten in der Reihe.
+  behalten.sort(function(a,b){ return (b.ended||b.ts||0)-(a.ended||a.ts||0); });
   state.history = behalten;
 }
 
@@ -1166,8 +1186,11 @@ function applyTurnSum(sum, dartsUsed, opened){
 
   var ns = p.score - sum;
 
-  // Ausgemacht: fuer die Statistik zaehlt, mit wie vielen Darts.
+  // Ausgemacht: fuer die Statistik zaehlt, mit wie vielen Darts. Und bei
+  // Doppel-Out weiss die App nicht, ob "20" ein Doppel 10 oder eine Single 20
+  // war - sie muss fragen, statt einen regelwidrigen Sieg zu buchen.
   if(ns===0 && !dartsUsed) return "finish";
+  if((ns<0 || (m.doubleOut && ns===1)) && !dartsUsed) return "bustfrage";
 
   snapshot();
   var d = dartsUsed || 3;
@@ -1178,12 +1201,14 @@ function applyTurnSum(sum, dartsUsed, opened){
     p.score = 0;
     closeTurn((m.bestOf||1)>1 && legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
     if(m.turnStartScore > (p.checkout||0)) p.checkout = m.turnStartScore;
-    sayLastTurn();
+    if(!quietSay) say(p.name + " macht aus.");   // sayLastTurn kennt "leg"/"win" nicht
     winLeg(p);
     save(); render();
     return m.finished ? "win" : (view==="platz" ? "platz" : "leg");
   }
   if(ns<0 || (m.doubleOut && ns===1)){
+    // Die drei Darts wurden oben schon gebucht; wenn der Aufrufer eine echte
+    // Zahl kennt, steht sie in dartsUsed und wurde verwendet.
     bust(); save(); render(); return "bust";
   }
   p.score = ns;
@@ -1199,7 +1224,7 @@ function renderSumPad(m, cur){
     if(val>180) warn = 'Mehr als 180 gibt es nicht';
     else if(rest<0) warn = 'Mehr als der Rest &ndash; das wäre überworfen';
     else if(m.doubleOut && rest===1) warn = 'Rest 1 ist nicht ausspielbar &ndash; überworfen';
-    else if(rest===0) warn = 'Ausgemacht!';
+    else if(rest===0) warn = m.doubleOut ? 'Aus &ndash; war es ein Doppel?' : 'Ausgemacht!';
   }
   function key(k, cls, label){
     return '<button class="btn'+(cls?" "+cls:"")+'" data-act="sumkey" data-k="'+k+'">'
@@ -1219,6 +1244,17 @@ function renderSumPad(m, cur){
       + '<button class="btn ghost sm" data-act="sumcancel" style="width:auto;margin:10px auto 0">Abbrechen</button>'
       + '</div>';
   }
+  if(pendingBust!==null){
+    return '<div class="sumfinish">'
+      + '<div class="sflabel">&#128165; Überworfen &ndash; wie viele Darts waren das?</div>'
+      + '<div class="row">'
+      +   '<button class="btn primary" data-act="sumbustd" data-d="1">1</button>'
+      +   '<button class="btn primary" data-act="sumbustd" data-d="2">2</button>'
+      +   '<button class="btn primary" data-act="sumbustd" data-d="3">3</button>'
+      + '</div>'
+      + '<button class="btn ghost sm" data-act="sumcancel" style="width:auto;margin:10px auto 0">Abbrechen</button>'
+      + '</div>';
+  }
   if(pendingFinish!==null){
     return '<div class="sumfinish">'
       + '<div class="sflabel">Mit wie vielen Darts ausgemacht?</div>'
@@ -1227,6 +1263,10 @@ function renderSumPad(m, cur){
       +   '<button class="btn primary" data-act="sumfin" data-d="2">2</button>'
       +   '<button class="btn primary" data-act="sumfin" data-d="3">3</button>'
       + '</div>'
+      + (m.doubleOut
+          ? '<button class="btn danger" data-act="sumbust" style="margin-top:9px">'
+            + 'War kein Doppel &ndash; überworfen</button>'
+          : '')
       + '<button class="btn ghost sm" data-act="sumcancel" style="width:auto;margin:10px auto 0">Abbrechen</button>'
       + '</div>';
   }
@@ -1356,23 +1396,33 @@ function renderPlatz(){
       + naechsterPlatz+'</b></div></div>'
     + '<div class="card" style="margin-bottom:14px">'+liste+'</div>'
     + '<button class="btn primary" data-act="nextplatz">Weiter um Platz '+naechsterPlatz+' &#8594;</button>'
-    + '<button class="btn ghost sm" data-act="platzende" style="width:auto;margin:10px auto 0">'
-      + 'Reicht &ndash; Ergebnis eintragen</button>';
+    + '<div class="row" style="margin-top:9px">'
+    +   '<button class="btn ghost" data-act="undo" style="flex:1">&#8630;&nbsp; Doch nicht</button>'
+    +   '<button class="btn ghost sm" data-act="platzende" style="flex:1">Reicht &ndash; eintragen</button>'
+    + '</div>';
 }
 
 function renderWin(){
   var m = state.match;
   var w = m.players.find(function(p){return p.id===m.winnerId;});
   var multi = (m.bestOf||1)>1;
-  var rows = m.players.slice().sort(function(a,b){return b.legsWon-a.legsWon;}).map(function(p){
+  var plz = m.platz || [];
+  var rows = m.players.slice().sort(function(a,b){
+    var ia = plz.indexOf(a.id), ib = plz.indexOf(b.id);
+    if(ia>=0 || ib>=0) return (ia<0?99:ia) - (ib<0?99:ib);   // Platzierung schlaegt Legs
+    return b.legsWon-a.legsWon;
+  }).map(function(p){
     var d = [];
     if(p.checkout) d.push("Finish "+p.checkout);
     if(p.best) d.push("Beste "+p.best);
     if(p.oneEighties) d.push(p.oneEighties+"&times;180");
+    var pos = plz.indexOf(p.id);
+    var zahl = pos>=0 ? (pos+1)+"." : (multi?p.legsWon:(p.id===m.winnerId?1:0));
     return '<div class="rank"><div class="nm">'+esc(p.name)
       + '<div class="sublbl">&#8960; '+(p.darts?(p.scored/p.darts*3).toFixed(1):"0.0")
-      + ' &middot; '+p.darts+' Darts'+(d.length?' &middot; '+d.join(" &middot; "):'')+'</div></div>'
-      + '<div class="wins">'+(multi?p.legsWon:(p.id===m.winnerId?1:0))+'<small>Legs</small></div></div>';
+      + ' &middot; '+p.darts+(p.darts===1?' Dart':' Darts')
+      + (d.length?' &middot; '+d.join(" &middot; "):'')+'</div></div>'
+      + '<div class="wins">'+zahl+'<small>'+(pos>=0?'Platz':'Legs')+'</small></div></div>';
   }).join("");
   return h()
     + '<div class="win"><div class="trophy">&#127942;</div>'
@@ -1595,7 +1645,7 @@ function clearHistory(){
   state.history = []; save();
 }
 function resetAll(){
-  state = defaultState(); h2hSel=null; h2hAuto=true; setupSel=null; save();
+  state = defaultState(); standUebernommen(); save();
 }
 
 function exportBlob(){
@@ -1642,7 +1692,7 @@ function importText(txt){
     return "Die Sicherung ist beschädigt und wurde nicht eingespielt.";
   }
   state = neu;
-  h2hSel = null; h2hAuto = true; setupSel = null; playerSel = null; soloWho = null;
+  standUebernommen();
   save();
   return null;
 }
@@ -1686,6 +1736,9 @@ function renderSettings(){
     + seg3("s_bo", st.bestOf, [{v:1,l:"1 Leg"},{v:3,l:"Bo3"},{v:5,l:"Bo5"},{v:7,l:"Bo7"}])
     + '<div style="height:10px"></div>'
     + toggle("s_di", !!st.doubleIn, "Doppel-In", "Erst ein Doppel eröffnet das Leg")
+    + '<div style="height:8px"></div>'
+    + toggle("s_platz", st.platzSpiel!==false, "Ab drei Leuten Platz 2 ausspielen",
+             "Wer ausgemacht hat, ist durch &ndash; die anderen spielen den Rest aus")
 
     + '<label class="lbl" style="margin-top:16px">Sprache</label>'
     + toggle("s_tts", !!st.tts, "Aufnahme laut ansagen",
@@ -2327,7 +2380,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="standok"){ standDefekt=false; render(); return; }
   if(act==="reloadstate"){
     if(confirm("Stand des anderen Fensters laden? Was hier offen ist, geht verloren.")){
-      state = load(); h2hSel=null; h2hAuto=true; setupSel=null;
+      state = load(); standUebernommen();
       fremdGeschrieben=false; view=restoreView(); render();
     }
     return;
@@ -2410,7 +2463,7 @@ document.getElementById("app").addEventListener("click", function(ev){
                      doubleIn:setupSel.doubleIn, bestOf:setupSel.bestOf});
     render(); return;
   }
-  if(act==="nextleg"){ view="game"; render(); return; }
+  if(act==="nextleg"){ view="game"; save(); render(); return; }
   if(act==="nextplatz"){ view="game"; save(); render(); return; }
   if(act==="platzende"){
     // Abbrechen: der Rest bleibt ohne Platz, das Ergebnis wird trotzdem gebucht.
@@ -2451,6 +2504,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="s_do"){ state.settings.doubleOut=t.getAttribute("data-v")==="1"; save(); render(); return; }
   if(act==="s_bo"){ state.settings.bestOf=parseInt(t.getAttribute("data-v"),10); save(); render(); return; }
   if(act==="s_di"){ state.settings.doubleIn=!state.settings.doubleIn; save(); render(); return; }
+  if(act==="s_platz"){ state.settings.platzSpiel=!(state.settings.platzSpiel!==false); save(); render(); return; }
   if(act==="s_tts"){ state.settings.tts=!state.settings.tts; ttsOn=!!state.settings.tts; save(); render(); return; }
   if(act==="s_hist"){ state.settings.keepHistory=!(state.settings.keepHistory!==false); save(); render(); return; }
   if(act==="s_export"){
@@ -2540,7 +2594,7 @@ document.getElementById("app").addEventListener("click", function(ev){
       while(state.match.currentTurn.length && undo()){}
     }
     state.settings.inputMode = t.getAttribute("data-v")==="sum" ? "sum" : "single";
-    sumInput=""; pendingFinish=null; pendingOpen=null; save(); render(); return;
+    sumInput=""; pendingFinish=null; pendingOpen=null; pendingBust=null; save(); render(); return;
   }
   if(act==="sumkey"){
     var k=t.getAttribute("data-k");
@@ -2552,6 +2606,7 @@ document.getElementById("app").addEventListener("click", function(ev){
       var r=applyTurnSum(v);
       if(r==="needopen"){ pendingOpen=v; render(); return; }
       if(r==="finish"){ pendingFinish=v; render(); return; }
+      if(r==="bustfrage"){ pendingBust=v; render(); return; }
       if(r==="ungueltig"){ sumInput=""; render(); return; }
       sumInput=""; render(); return;
     }
@@ -2569,6 +2624,19 @@ document.getElementById("app").addEventListener("click", function(ev){
     var dd=parseInt(t.getAttribute("data-d"),10);
     applyTurnSum(pendingFinish, dd); pendingFinish=null; sumInput=""; render(); return;
   }
+  if(act==="sumbustd"){
+    var db=parseInt(t.getAttribute("data-d"),10);
+    applyTurnSum(pendingBust, db); pendingBust=null; sumInput=""; render(); return;
+  }
+  if(act==="sumbust"){
+    // Auf 0 gekommen, aber nicht mit einem Doppel: das ist ein Bust.
+    var v3 = pendingFinish; pendingFinish=null; sumInput="";
+    var m3 = state.match, p3 = m3.players[m3.currentIdx];
+    snapshot();
+    p3.darts += 3; p3.legDarts += 3;
+    m3.currentTurn = [{label:String(v3), value:0, sum:true}];
+    bust(); save(); render(); return;
+  }
   if(act==="sumopen"){
     var ja = t.getAttribute("data-v")==="1";
     var v2 = pendingOpen; pendingOpen=null;
@@ -2577,7 +2645,7 @@ document.getElementById("app").addEventListener("click", function(ev){
     else sumInput="";
     render(); return;
   }
-  if(act==="sumcancel"){ pendingFinish=null; pendingOpen=null; render(); return; }
+  if(act==="sumcancel"){ pendingFinish=null; pendingOpen=null; pendingBust=null; render(); return; }
   if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
   if(act==="num"){ applyDart(curMult, parseInt(t.getAttribute("data-n"),10)); return; }
   if(act==="undo"){ undo(); return; }
@@ -2634,15 +2702,21 @@ render();
 
 // Bildschirm anlassen, solange gespielt wird. Zwischen zwei Aufnahmen vergehen
 // leicht zwei Minuten, in denen niemand das Handy anfasst.
-var wachHalter = null;
+var wachHalter = null, wachLaeuft = false, wachSoll = false;
 function bildschirmWach(an){
+  wachSoll = an;
   try{
     if(!navigator.wakeLock) return;
-    if(an && !wachHalter){
+    if(an && !wachHalter && !wachLaeuft){
+      // Ohne das Laeuft-Flag fordert jeder Dart eine eigene Sperre an - die
+      // Freigabe kennt aber nur die letzte, der Rest bleibt verwaist offen.
+      wachLaeuft = true;
       navigator.wakeLock.request("screen").then(function(w){
+        wachLaeuft = false;
+        if(!wachSoll){ w.release().catch(function(){}); return; }   // inzwischen abbestellt
         wachHalter = w;
         w.addEventListener("release", function(){ wachHalter = null; });
-      }).catch(function(){});
+      }).catch(function(){ wachLaeuft = false; });
     } else if(!an && wachHalter){
       wachHalter.release().catch(function(){});
       wachHalter = null;
@@ -2663,7 +2737,7 @@ if(typeof window.addEventListener === "function"){
     if(!ev || ev.key !== KEY) return;
     fremdGeschrieben = true;
     if(!state.match && !state.train){        // nichts offen -> einfach uebernehmen
-      state = load(); h2hSel=null; h2hAuto=true; setupSel=null;
+      state = load(); standUebernommen();
       fremdGeschrieben = false;
       view = restoreView();
     }
