@@ -530,6 +530,99 @@ t("Ergebnisliste zeigt den Legs-Stand aus Siegersicht", () => {
   ok(!app.innerHTML.includes("Bo3 &middot; 0:2"), "nie der verdrehte Stand");
 });
 
+// ================================================================ Einstellungen & Sicherung
+t("Einstellungs-Screen rendert und zeigt die echten Zahlen", () => {
+  const { D, app } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  D.setView("settings"); D.render();
+  ok(app.innerHTML.includes("Standard für neue Spiele"), "Kopfbereich da");
+  ok(/<b>1<\/b> Spiele/.test(app.innerHTML), "Verlaufszaehler zeigt die echte Zahl");
+  ok(app.innerHTML.includes("Verlauf löschen (1 Spiele)"), "echte Zahl, nicht Platzhalter");
+});
+
+t("Verlauf loeschen friert die Wins ein statt sie zu verlieren", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "arne"], 0);
+  eq(D.totalWins("lion"), 3, "1 von Hand + 2 gespielt");
+  D.clearHistory();
+  eq(D.getHistory().length, 0);
+  eq(D.totalWins("lion"), 3, "die Zahl bleibt stehen");
+  eq(D.totalWins("arne"), 3, "Arne unveraendert");
+  eq(D.h2h("lion", "arne").n, 0, "Duell-Bilanz ist erwartungsgemaess weg");
+});
+
+t("Sicherung enthaelt Team, Verlauf und Einstellungen", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  const pay = D.exportPayload();
+  eq(pay.app, "darts");
+  eq(pay.state.history.length, 1);
+  eq(pay.state.roster.length, 3);
+  ok(pay.state.settings.gameType === 501);
+});
+
+t("Sicherung laesst sich wieder einspielen", () => {
+  const A = boot();
+  playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(A.D, ["lion", "arne"], 0);
+  A.D.setWins("arne", 42);
+  const json = JSON.stringify(A.D.exportPayload());
+
+  const B = boot();
+  eq(B.D.getHistory().length, 0, "frischer Stand");
+  eq(B.D.importText(json), null, "kein Fehler");
+  eq(B.D.getHistory().length, 2, "Verlauf uebernommen");
+  eq(B.D.totalWins("arne"), 42, "Handstand uebernommen");
+  eq(B.D.h2h("lion", "arne").winsA, 2, "Duell-Bilanz rekonstruiert");
+});
+
+t("Kaputte Sicherung wird abgewiesen statt eingespielt", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  ok(D.importText("kein json") !== null, "Fehlermeldung");
+  ok(D.importText('{"foo":1}') !== null, "kein Team drin");
+  eq(D.getHistory().length, 1, "der bestehende Stand ueberlebt beide Versuche");
+});
+
+t("Import einer alten v1-Sicherung geht auch", () => {
+  const { D } = boot();
+  const err = D.importText(JSON.stringify({
+    roster: [{ id: "x", name: "Xaver", wins: 5 }], match: null }));
+  eq(err, null);
+  eq(D.totalWins("x"), 5, "wins wird zu winsManual");
+  ok(D.getSettings().gameType === 501, "Einstellungen ergaenzt");
+});
+
+t("Alles zuruecksetzen stellt den Auslieferungszustand her", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  D.setWins("lion", 99);
+  D.resetAll();
+  eq(D.getHistory().length, 0);
+  eq(D.totalWins("lion"), 1, "wieder der Startbestand");
+  eq(D.getRoster().length, 3);
+});
+
+t("Einstellungen wirken auf neue Spiele", () => {
+  const { D } = boot();
+  const st = D.getState();
+  st.settings.gameType = 301; st.settings.bestOf = 5; st.settings.doubleOut = false;
+  D.startMatch(["lion", "arne"], {});
+  const m = D.getMatch();
+  eq(m.gameType, 301);
+  eq(m.bestOf, 5);
+  eq(m.doubleOut, false);
+  eq(m.players[0].score, 301);
+});
+
+t("Ausdrueckliche Optionen schlagen die Einstellungen", () => {
+  const { D } = boot();
+  D.getState().settings.gameType = 301;
+  D.startMatch(["lion"], { gameType: 701 });
+  eq(D.getMatch().gameType, 701);
+});
+
 // ---------------------------------------------------------------- Ausgabe
 console.log("");
 if (fails.length) {

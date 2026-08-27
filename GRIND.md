@@ -9,7 +9,7 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
       sagen, GEGEN WEN gewonnen wurde. Migration v1→v2, Lions Hand-Wins bleiben als Basis-Offset.
 - [x] 2 **Head-to-Head / Matchup-Ansicht** — "Lion vs Arne 7:3", letzte Spiele, Ø. Der eigentliche Wunsch.
 - [x] 3 **Legs & Best-of** — ohne Legs ist eine Darts-App nicht vollwertig (Bo3/Bo5/Bo7).
-- [ ] 4 **Einstellungen-Screen** — Standardmodus, Doppel-In/Out, Legs, TTS, Export/Import, Reset.
+- [x] 4 **Einstellungen-Screen** — Standardmodus, Doppel-In/Out, Legs, TTS, Export/Import, Reset.
 - [ ] 5 **Einzelspieler** — Solo-X01 gegen Bestwert + Trainingsmodi (Doppel-Training, Around the Clock).
 - [ ] 6 **Spieler-Statistik** — 3-Dart-Ø, bester Checkout, höchste Aufnahme, 180er, Form letzte 10.
 - [ ] 7 **PWA** — Manifest + Service Worker, offline installierbar auf dem Handy.
@@ -22,6 +22,20 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 18:05 — Iteration 3: Einstellungen + Datensicherung
+- Was: Einstellungs-Screen (Zahnrad im Kopf): Standardmodus, Ausgang, Legs, Doppel-In,
+  Sprachausgabe, Verlauf-Schalter, Export als Datei/Zwischenablage, Import, Verlauf
+  löschen, alles zurücksetzen.
+- Eigeninput: **Export/Import war nicht beauftragt, gehört aber dazu** — die App führt
+  ab 1.3 eine Historie, und ein geleerter Browser-Cache hätte sie ersatzlos vernichtet.
+  Ebenso: **Verlauf löschen friert die Wins ein** statt Lion von 10 auf 1 zurückzuwerfen.
+- Ergebnis: OK. Ein Mangel im Screenshot gefunden: die Info-Karte missbrauchte das
+  A-gegen-B-Vergleichslayout und las sich als Fehler („Spieler rechts") → eine Info-Zeile.
+- Verifiziert: 51/51 Tests (9 neue: Export/Import-Rundlauf, kaputte Sicherung wird
+  abgewiesen, v1-Sicherung importierbar, Wins-Einfrieren, Einstellungen wirken).
+  Rot-Probe 3 Mutationen, alle gefangen. Screenshot 390x844.
+- Version: 1.5
 
 ### 27.08.2026 17:15 — Iteration 1: Datenmodell v2
 - Was: `wins`-Zaehler durch Match-Historie ersetzt, Legs/Best-of, Doppel-In,

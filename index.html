@@ -25,6 +25,12 @@
   header .logo{font-size:22px;}
   header h1{font-size:18px; font-weight:700; margin:0; letter-spacing:.3px; flex:1;}
   header .ver{font-size:11px; color:var(--muted);}
+  header .iconbtn{background:transparent; border:none; color:var(--muted); font-size:19px;
+    padding:4px 2px; cursor:pointer; line-height:1;}
+  .okmsg{font-size:13px; color:var(--accent); margin-top:10px; font-weight:600;}
+  .infoline{font-size:12.5px; color:var(--muted); margin:10px 3px 0;}
+  .infoline b{color:var(--text); font-weight:700;}
+  .pick .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:500; margin-top:2px;}
   .btn{display:flex; align-items:center; justify-content:center; gap:8px;
     min-height:50px; padding:0 16px; border:none; border-radius:14px; cursor:pointer;
     font-size:16px; font-weight:600; color:var(--text); background:var(--card2);
@@ -206,7 +212,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.4";
+var VER    = "1.5";
 
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
@@ -293,6 +299,7 @@ var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
 var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, bestOf}
 var h2hSel = null;       // [idA, idB] im Direktvergleich
 var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Blick neu bestimmt
+var settingsMsg = "";    // kurze Rueckmeldung im Einstellungs-Screen
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -550,7 +557,8 @@ function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
 
 function h(){ return '<header><span class="logo">&#127919;</span><h1>Darts</h1>'
-  + '<span class="ver">v'+VER+'</span></header>'; }
+  + '<button class="iconbtn" data-act="nav" data-view="settings" aria-label="Einstellungen">&#9881;&#65039;</button>'
+  + '</header>'; }
 
 // Die zuletzt gespielten Paarungen direkt auf der Startseite - eine Zeile je
 // Duell, tippen fuehrt in den Direktvergleich.
@@ -962,6 +970,112 @@ function renderH2H(){
       + '&#127919;&nbsp; '+na+' gegen '+nb+' spielen</button>';
 }
 
+// ---------------------------------------------------------------------------
+// Einstellungen + Datensicherung
+// Die App fuehrt jetzt eine Historie - ein geleerter Browser-Cache wuerde sie
+// ersatzlos vernichten. Darum Export/Import direkt hier drin.
+// ---------------------------------------------------------------------------
+function exportPayload(){ return {app:"darts", v:2, exported:Date.now(), state:state}; }
+
+// Verlauf loeschen, ohne dass Lion von 10 Wins auf 1 zurueckfaellt: der
+// abgeleitete Stand wird vorher in den Handeintrag eingefroren.
+function clearHistory(){
+  state.roster.forEach(function(p){ p.winsManual = totalWins(p.id); });
+  state.history = []; save();
+}
+function resetAll(){
+  state = defaultState(); h2hSel=null; h2hAuto=true; setupSel=null; save();
+}
+
+function exportBlob(){
+  var data = JSON.stringify(exportPayload(), null, 1);
+  var name = "darts-sicherung-" + new Date().toISOString().slice(0,10) + ".json";
+  try{
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([data], {type:"application/json"}));
+    a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 800);
+    return true;
+  }catch(e){ return false; }
+}
+function exportClipboard(){
+  var data = JSON.stringify(exportPayload());
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(data);
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+// Import: ersetzt den kompletten Stand. Wird nur nach Rueckfrage aufgerufen.
+function importText(txt){
+  var obj;
+  try{ obj = JSON.parse(txt); }catch(e){ return "Das ist keine gültige Sicherung."; }
+  var st = obj && obj.state ? obj.state : obj;
+  if(!st || !st.roster || !st.roster.length) return "In der Datei steht kein Team.";
+  state = upgradeShape(st);
+  h2hSel = null; h2hAuto = true; setupSel = null;
+  save();
+  return null;
+}
+
+function renderSettings(){
+  var st = state.settings;
+  function seg3(act, val, opts){
+    return '<div class="seg">' + opts.map(function(o){
+      return '<button class="btn'+(val===o.v?" on":"")+'" data-act="'+act+'" data-v="'+o.v+'">'
+        + o.l + '</button>';
+    }).join("") + '</div>';
+  }
+  function toggle(act, on, label, sub){
+    return '<div class="pick'+(on?" on":"")+'" data-act="'+act+'">'
+      + '<div class="dot"></div><div class="nm">'+label
+      + (sub?'<div class="sublbl">'+sub+'</div>':'')+'</div></div>';
+  }
+  var nGames = state.history.length;
+  var nPlayers = state.roster.length;
+
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+
+    + '<label class="lbl">Standard für neue Spiele</label>'
+    + seg3("s_gt", st.gameType, [{v:301,l:"301"},{v:501,l:"501"},{v:701,l:"701"}])
+    + '<div style="height:8px"></div>'
+    + seg3("s_do", st.doubleOut?1:0, [{v:1,l:"Doppel-Out"},{v:0,l:"Beliebig"}])
+    + '<div style="height:8px"></div>'
+    + seg3("s_bo", st.bestOf, [{v:1,l:"1 Leg"},{v:3,l:"Bo3"},{v:5,l:"Bo5"},{v:7,l:"Bo7"}])
+    + '<div style="height:10px"></div>'
+    + toggle("s_di", !!st.doubleIn, "Doppel-In", "Erst ein Doppel eröffnet das Leg")
+
+    + '<label class="lbl" style="margin-top:16px">Sprache</label>'
+    + toggle("s_tts", !!st.tts, "Ansage laut vorlesen", "Im Spiel jederzeit über das Lautsprecher-Symbol")
+
+    + '<label class="lbl" style="margin-top:16px">Verlauf</label>'
+    + toggle("s_hist", st.keepHistory!==false, "Spiele mitschreiben",
+             "Ohne Verlauf gibt es keine Duell-Bilanz und keine Statistik")
+    + '<div class="infoline"><b>'+nGames+'</b> Spiele &middot; <b>'+nPlayers+'</b> Spieler '
+      + '&middot; Version '+VER+'</div>'
+
+    + '<label class="lbl" style="margin-top:16px">Sicherung</label>'
+    + '<div class="stack">'
+    +   '<button class="btn" data-act="s_export">&#11015;&#65039;&nbsp; Als Datei sichern</button>'
+    +   '<button class="btn" data-act="s_copy">&#128203;&nbsp; In die Zwischenablage</button>'
+    +   '<button class="btn" data-act="s_import">&#11014;&#65039;&nbsp; Sicherung einspielen</button>'
+    + '</div>'
+    + '<input type="file" id="impFile" accept="application/json,.json" style="display:none">'
+    + '<div class="hint" style="text-align:left">Alles liegt nur in diesem Browser. Cache leeren '
+      + 'oder Handy wechseln = weg. Die Sicherung ist die einzige Kopie.</div>'
+    + (settingsMsg ? '<div class="okmsg">'+settingsMsg+'</div>' : '')
+
+    + '<label class="lbl" style="margin-top:18px">Aufräumen</label>'
+    + '<div class="stack">'
+    +   '<button class="btn danger" data-act="s_clearhist">Verlauf löschen ('+nGames+' Spiele)</button>'
+    +   '<button class="btn danger" data-act="s_reset">Alles zurücksetzen</button>'
+    + '</div>';
+}
+
 function render(){
   if(view!=="game" && view!=="leg" && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Legs an
   var el = document.getElementById("app");
@@ -971,6 +1085,7 @@ function render(){
   else if(view==="win" && state.match && state.match.finished) html = renderWin();
   else if(view==="roster") html = renderRoster();
   else if(view==="h2h") html = renderH2H();
+  else if(view==="settings") html = renderSettings();
   else if(view==="setup") html = renderSetup();
   else { view="home"; html = renderHome(); }
   el.innerHTML = html;
@@ -984,7 +1099,7 @@ function render(){
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 var recog = null;
 var voiceOn = false;
-var ttsOn = true;
+var ttsOn = state.settings.tts !== false;
 var speaking = false;
 var voiceMsg = "";
 
@@ -1192,7 +1307,12 @@ document.getElementById("app").addEventListener("click", function(ev){
   var t = ev.target.closest("[data-act]"); if(!t) return;
   var act = t.getAttribute("data-act");
 
-  if(act==="nav"){ view=t.getAttribute("data-view"); if(view==="setup") setupSel=null; render(); return; }
+  if(act==="nav"){
+    view=t.getAttribute("data-view");
+    if(view==="setup") setupSel=null;
+    if(view!=="settings") settingsMsg="";
+    render(); return;
+  }
   if(act==="resume"){ view="game"; render(); return; }
   if(act==="abort"){ if(confirm("Aktuelles Spiel verwerfen?")){ state.match=null; save(); render(); } return; }
 
@@ -1246,6 +1366,52 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="nextleg"){ view="game"; render(); return; }
 
+  // Einstellungen
+  if(act==="s_gt"){ state.settings.gameType=parseInt(t.getAttribute("data-v"),10); save(); render(); return; }
+  if(act==="s_do"){ state.settings.doubleOut=t.getAttribute("data-v")==="1"; save(); render(); return; }
+  if(act==="s_bo"){ state.settings.bestOf=parseInt(t.getAttribute("data-v"),10); save(); render(); return; }
+  if(act==="s_di"){ state.settings.doubleIn=!state.settings.doubleIn; save(); render(); return; }
+  if(act==="s_tts"){ state.settings.tts=!state.settings.tts; ttsOn=!!state.settings.tts; save(); render(); return; }
+  if(act==="s_hist"){ state.settings.keepHistory=!(state.settings.keepHistory!==false); save(); render(); return; }
+  if(act==="s_export"){
+    settingsMsg = exportBlob() ? "Sicherung gespeichert." : "Download ging nicht – nimm die Zwischenablage.";
+    render(); return;
+  }
+  if(act==="s_copy"){
+    settingsMsg = exportClipboard() ? "In der Zwischenablage – irgendwo einfügen und sichern."
+                                    : "Zwischenablage nicht erlaubt.";
+    render(); return;
+  }
+  if(act==="s_import"){
+    var fi=document.getElementById("impFile"); if(!fi) return;
+    fi.onchange=function(){
+      var f=fi.files&&fi.files[0]; if(!f) return;
+      var rd=new FileReader();
+      rd.onload=function(){
+        if(!confirm("Sicherung einspielen? Der aktuelle Stand wird ersetzt.")) return;
+        var err=importText(String(rd.result));
+        settingsMsg = err ? err : "Sicherung eingespielt.";
+        render();
+      };
+      rd.readAsText(f);
+    };
+    fi.click(); return;
+  }
+  if(act==="s_clearhist"){
+    if(!state.history.length) return;
+    if(confirm("Verlauf löschen? Die Wins bleiben als Zahl stehen, aber Duell-Bilanz und Statistik sind weg.")){
+      // Wins einfrieren, sonst faellt Lion nach dem Loeschen von 10 auf 1 zurueck.
+      clearHistory(); settingsMsg = "Verlauf gelöscht, Wins eingefroren."; render();
+    }
+    return;
+  }
+  if(act==="s_reset"){
+    if(confirm("Wirklich ALLES zurücksetzen? Team, Wins und Verlauf sind dann weg.")){
+      resetAll(); settingsMsg=""; view="home"; render();
+    }
+    return;
+  }
+
   // Direktvergleich
   if(act==="h2hpick"){
     var hid=t.getAttribute("data-id"); var k=h2hSel.indexOf(hid);
@@ -1272,7 +1438,11 @@ document.getElementById("app").addEventListener("click", function(ev){
 
   // Sprach-Eingabe
   if(act==="voice"){ if(voiceOn){ stopVoice(); } else { startVoice(); } render(); return; }
-  if(act==="tts"){ ttsOn=!ttsOn; if(!ttsOn){ try{ if("speechSynthesis" in window) speechSynthesis.cancel(); }catch(e){} } render(); return; }
+  if(act==="tts"){
+    ttsOn=!ttsOn; state.settings.tts=ttsOn; save();
+    if(!ttsOn){ try{ if("speechSynthesis" in window) speechSynthesis.cancel(); }catch(e){} }
+    render(); return;
+  }
 
   // Win
   if(act==="winagain"){
@@ -1294,7 +1464,8 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   render:render, getMatch:function(){return state.match;},
   finishMatch:finishMatch, undo:undo, endTurn:endTurn, legsNeeded:legsNeeded,
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
-  meId:meId, orderPair:orderPair,
+  meId:meId, orderPair:orderPair, importText:importText,
+  exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
   totalWins:totalWins, historyWins:historyWins, migrate:migrate, upgradeShape:upgradeShape,
   defaultState:defaultState, getState:function(){return state;},
   setState:function(s2){ state=s2; }, setView:function(v){ view=v; }, getView:function(){return view;},
