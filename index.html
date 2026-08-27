@@ -272,7 +272,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.11";
+var VER    = "1.12";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -309,6 +309,7 @@ function migrate(old){
     var m = old.match;
     m.id=mid(); m.ts=Date.now(); m.mode="x01";
     m.bestOf=1; m.legNo=1; m.startIdx=0; m.doubleIn=false; m.legs=[];
+    m._undo=[];                   // v1-Schnappschuesse kennen die Leg-Felder nicht
     m.players = m.players.map(function(p){
       return {id:p.id, name:p.name, score:p.score, darts:p.darts||0, legsWon:0,
               scored:0, best:0, tons:0, oneEighties:0, checkout:0,
@@ -349,6 +350,7 @@ function upgradeShape(s){
     // Felder, ohne die der naechste Dart wirft. Fremde oder alte Sicherungen
     // bringen sie nicht immer mit.
     if(!Array.isArray(m._undo)) m._undo=[];
+    if(!("lastTurn" in m)) m.lastTurn=null;
     if(!Array.isArray(m.currentTurn)) m.currentTurn=[];
     if(typeof m.currentIdx!=="number" || !m.players[m.currentIdx]) m.currentIdx=0;
     if(typeof m.gameType!=="number") m.gameType=501;
@@ -462,6 +464,19 @@ function checkout(score, dartsLeft, doubleOut){
 // ---------------------------------------------------------------------------
 function rosterOf(id){ return state.roster.find(function(p){return p.id===id;}); }
 
+// Vor jedem Start: laeuft noch etwas, das sonst kommentarlos verschwindet?
+// Ein gewonnenes, nicht eingetragenes Spiel ist der teuerste Fall - es waere
+// aus Rangliste und Duellbilanz ersatzlos weg.
+function darfUeberschreiben(){
+  if(state.match && state.match.finished)
+    return confirm("Das gewonnene Spiel ist noch nicht eingetragen. Wirklich verwerfen?");
+  if(state.match)
+    return confirm("Es läuft noch ein Spiel. Wirklich verwerfen?");
+  if(state.train && !state.train.done)
+    return confirm("Es läuft noch eine Übung. Wirklich abbrechen?");
+  return true;
+}
+
 // "Das bin ich": in Duellen steht dieser Spieler immer links. Ohne den Marker
 // entschiede die alphabetische Reihenfolge, und Lion staende mal links, mal
 // rechts - bei einer Bilanz wie 3:8 muss man dann jedes Mal neu hinsehen.
@@ -512,28 +527,35 @@ function startMatch(playerIds, opts){
     bestOf:    opts.bestOf   || st.bestOf || 1,
     players: playerIds.map(function(id){ return freshPlayer(id, gt); }),
     currentIdx:0, startIdx:0, legNo:1,
-    currentTurn:[], turnStartScore:gt,
+    currentTurn:[], turnStartScore:gt, lastTurn:null,
     legs:[], finished:false, winnerId:null, _undo:[]
   };
   curMult = 1; view = "game"; save();
 }
 
+// Alles, was ein Undo wiederherstellen muss - an EINER Stelle. Wer hier ein Feld
+// vergisst, baut eine Anzeige, die nach dem Zurueck weiter das Alte behauptet.
+var MATCH_SNAP = ["players","currentIdx","currentTurn","turnStartScore",
+                  "finished","winnerId","legNo","startIdx","legs","lastTurn"];
 function snapshot(){
-  var m = state.match;
-  m._undo.push(JSON.stringify({
-    players:m.players, currentIdx:m.currentIdx, currentTurn:m.currentTurn,
-    turnStartScore:m.turnStartScore, finished:m.finished, winnerId:m.winnerId,
-    legNo:m.legNo, startIdx:m.startIdx, legs:m.legs
-  }));
+  var m = state.match, o = {};
+  for(var i=0;i<MATCH_SNAP.length;i++) o[MATCH_SNAP[i]] = m[MATCH_SNAP[i]];
+  m._undo.push(JSON.stringify(o));
   if(m._undo.length>80) m._undo.shift();
 }
+// Rueckgabe: wurde wirklich etwas zurueckgenommen? Ohne die Antwort meldet der
+// Sprachmodus "zurueck" auch dann, wenn der Stapel leer war.
 function undo(){
-  var m = state.match; if(!m || !m._undo.length) return;
+  var m = state.match; if(!m || !m._undo.length) return false;
   var s = JSON.parse(m._undo.pop());
-  m.players=s.players; m.currentIdx=s.currentIdx; m.currentTurn=s.currentTurn;
-  m.turnStartScore=s.turnStartScore; m.finished=s.finished; m.winnerId=s.winnerId;
-  m.legNo=s.legNo; m.startIdx=s.startIdx; m.legs=s.legs;
-  curMult = 1; view = "game"; save(); render();
+  // Nur Felder uebernehmen, die im Schnappschuss stehen - ein Stapel aus einer
+  // aelteren Fassung kennt legs/legNo/startIdx nicht und wuerde sie auf
+  // undefined setzen.
+  for(var i=0;i<MATCH_SNAP.length;i++){
+    var f = MATCH_SNAP[i];
+    if(Object.prototype.hasOwnProperty.call(s,f)) m[f] = s[f];
+  }
+  curMult = 1; view = "game"; save(); render(); return true;
 }
 
 // Aufnahme abschliessen: erst die Statistik buchen, dann weiterreichen.
@@ -549,10 +571,13 @@ function closeTurn(kind){
   }
   // Was der Vorgaenger geworfen hat, muss stehen bleiben. Sonst ist ein Bust
   // vom Bildschirm nicht zu unterscheiden und "was hatt ich?" nicht zu beantworten.
-  m.lastTurn = {
-    id:p.id, name:p.name, kind:kind||"ok", sum:Math.max(0,got), rest:p.score,
-    labels:m.currentTurn.map(function(d){return d.label;})
-  };
+  // Wer ohne Wurf weiterreicht, loescht damit aber nicht die Anzeige davor.
+  if(m.currentTurn.length){
+    m.lastTurn = {
+      id:p.id, name:p.name, kind:kind||"ok", sum:Math.max(0,got), rest:p.score,
+      labels:m.currentTurn.map(function(d){return d.label;})
+    };
+  }
 }
 var quietSay = false;   // true, solange der Sprachmodus selbst ansagt
 
@@ -597,6 +622,7 @@ function winLeg(p){
   m.currentIdx = m.startIdx;
   m.players.forEach(function(q){ q.score=m.gameType; q.legDarts=0; q.legStart=true; });
   m.currentTurn = []; m.turnStartScore = m.gameType; curMult = 1;
+  m.lastTurn = null;              // sonst steht der Ausmach-Wurf im naechsten Leg
   view = "leg";
 }
 
@@ -1979,6 +2005,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="start"){
     var ids = state.roster.filter(function(p){return setupSel.selected.has(p.id);}).map(function(p){return p.id;});
     if(ids.length<1){ return; }
+    if(!darfUeberschreiben()) return;
     startMatch(ids, {gameType:setupSel.gameType, doubleOut:setupSel.doubleOut,
                      doubleIn:setupSel.doubleIn, bestOf:setupSel.bestOf});
     render(); return;
@@ -1988,9 +2015,16 @@ document.getElementById("app").addEventListener("click", function(ev){
   // Allein üben
   if(act==="solowho"){ soloWho=t.getAttribute("data-id"); render(); return; }
   if(act==="openplayer"){ playerSel=t.getAttribute("data-id"); view="player"; render(); return; }
-  if(act==="solox01"){ startMatch([soloWho], {mode:"solo"}); render(); return; }
-  if(act==="train_double"){ startTraining("double", soloWho); render(); return; }
-  if(act==="train_around"){ startTraining("around", soloWho); render(); return; }
+  if(act==="solox01"){
+    if(!soloWho || !rosterOf(soloWho)) return;       // ohne Spieler kein Spiel
+    if(!darfUeberschreiben()) return;
+    startMatch([soloWho], {mode:"solo"}); render(); return;
+  }
+  if(act==="train_double" || act==="train_around"){
+    if(!soloWho || !rosterOf(soloWho)) return;
+    if(!darfUeberschreiben()) return;
+    startTraining(act==="train_double" ? "double" : "around", soloWho); render(); return;
+  }
   if(act==="thit"){ trainDart(true); render(); return; }
   if(act==="tmiss"){ trainDart(false); render(); return; }
   if(act==="tundo"){ trainUndo(); render(); return; }
@@ -2073,12 +2107,19 @@ document.getElementById("app").addEventListener("click", function(ev){
     view="h2h"; render(); return;
   }
   if(act==="duelstart"){
-    if(h2hSel.length===2){ startMatch([h2hSel[0],h2hSel[1]], {}); render(); }
-    return;
+    if(h2hSel.length!==2) return;
+    if(!rosterOf(h2hSel[0]) || !rosterOf(h2hSel[1])) return;   // geloeschte Spieler nicht neu starten
+    if(!darfUeberschreiben()) return;
+    startMatch([h2hSel[0],h2hSel[1]], {}); render(); return;
   }
 
   // Spiel
   if(act==="imode"){
+    // Eine angefangene Aufnahme zurueckdrehen: sonst zaehlt der Summen-Pfad die
+    // schon geworfenen Darts ein zweites Mal (2 Darts + Summe = 5 Darts).
+    if(state.match && !state.match.finished){
+      while(state.match.currentTurn.length && undo()){}
+    }
     state.settings.inputMode = t.getAttribute("data-v")==="sum" ? "sum" : "single";
     sumInput=""; pendingFinish=null; save(); render(); return;
   }

@@ -131,6 +131,12 @@ function klassen(ctx, act, id) {
   return String(ctx.classOf(act, { "data-id": id }) || "").split(/\s+/).filter(Boolean);
 }
 
+// Nur die "Zuletzt"-Zeile - Namen und Zahlen stehen sonst ueberall auf dem Board.
+function zuletztZeile(ctx) {
+  const m = ctx.app.innerHTML.match(/<div class="lastturn[^"]*">([\s\S]*?)<\/div>/);
+  return m ? m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() : null;
+}
+
 // Die zwei Namen aus der Duell-Kopfzeile, in der Reihenfolge, in der sie stehen.
 function duellNamen(ctx) {
   const m = ctx.app.innerHTML.match(/<div class="h2hnames">([\s\S]*?)<\/div>\s*<div class="h2hbig">/);
@@ -1587,6 +1593,133 @@ t("Summen-Eingabe und Einzel-Eingabe fuehren zum selben Ergebnis", () => {
   const pa = a.D.getMatch().players[0], pb = b.D.getMatch().players[0];
   eq([pa.score, pa.darts, pa.scored], [pb.score, pb.darts, pb.scored],
      "Rest, Darts und erzielte Punkte identisch");
+});
+
+// ================================================================ Zuletzt-Zeile
+t("Die Zuletzt-Zeile ueberlebt kein Undo als Luege", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["T20", "T20", "T20"]);                    // 180, Aufnahme voll
+  D.setView("game"); D.render();
+  ok(/180/.test(ctx.app.innerHTML), "die Aufnahme steht da");
+  D.undo(); D.undo(); D.undo();                     // alles zurueck
+  eq(D.getMatch().players[0].score, 501, "Stand zurueckgesetzt");
+  D.render();
+  eq(zuletztZeile(ctx), null,
+     "eine zurueckgenommene Aufnahme darf nicht weiter auf dem Board stehen. War: " +
+     zuletztZeile(ctx));
+});
+
+t("Ein zurueckgenommener Bust verschwindet auch von der Anzeige", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 20);
+  throwDart(D, "T20");                              // Bust
+  D.setView("game"); D.render();
+  ok(/überworfen/.test(ctx.app.innerHTML), "erst steht er da");
+  D.undo();
+  D.render();
+  eq(zuletztZeile(ctx), null, "nach dem Zurueck ist er weg: " + zuletztZeile(ctx));
+});
+
+t("Im neuen Leg steht keine Aufnahme aus dem alten", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setScore(0, 40);
+  eq(throwDart(D, "D20"), "leg");
+  ctx.click("nextleg");
+  eq(D.getMatch().players[0].score, 501, "neues Leg");
+  eq(zuletztZeile(ctx), null,
+     "der Ausmach-Wurf aus Leg 1 gehoert nicht auf das Board von Leg 2. War: " +
+     zuletztZeile(ctx));
+});
+
+t("Aufnahme beenden loescht nicht, was der Vorgaenger geworfen hat", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["20", "20", "20"]);                       // Lion 60, Wechsel zu Arne
+  D.setView("game"); D.render();
+  const vorher = zuletztZeile(ctx);
+  ok(/Lion/.test(vorher || "") && /60/.test(vorher || ""),
+     "erst steht Lions Aufnahme da: " + vorher);
+  ctx.click("skip");                                // Arne beendet ohne Wurf
+  const nachher = zuletztZeile(ctx);
+  eq(nachher, vorher,
+     "wer ohne Wurf weiterreicht, loescht nicht die Anzeige davor. War: " + nachher);
+});
+
+t("Undo sagt, ob es etwas zurueckgenommen hat", () => {
+  const { D } = boot();
+  D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  eq(D.undo(), false, "leerer Stapel");
+  throwDart(D, "20");
+  eq(D.undo(), true, "ein Wurf zurueck");
+  eq(D.undo(), false, "und dann nichts mehr");
+});
+
+// ================================================================ Nichts wird stillschweigend verworfen
+t("Ein gewonnenes, nicht eingetragenes Spiel wird nicht kommentarlos ueberschrieben", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");           // gewonnen, noch nicht eingetragen
+  ctx.answers.confirm = false;                      // der Nutzer sagt "nein, nicht verwerfen"
+  D.setView("setup"); D.render();
+  ctx.click("start");
+  ok(D.getMatch() && D.getMatch().finished,
+     "das gewonnene Spiel steht noch - es wurde gefragt und verneint");
+  eq(D.getHistory().length, 0);
+  ctx.answers.confirm = true;                       // jetzt bewusst verwerfen
+  D.setView("setup"); D.render();
+  ctx.click("start");
+  ok(D.getMatch() && !D.getMatch().finished, "neues Spiel laeuft");
+});
+
+t("Ein laufendes Spiel wird von 'Allein ueben' nicht stillschweigend gekippt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 5 });
+  throwDart(D, "T20");
+  ctx.answers.confirm = false;
+  D.setView("solo"); D.render();
+  ctx.click("solox01");
+  eq(D.getMatch().bestOf, 5, "das Bo5 laeuft weiter");
+  eq(D.getMatch().players.length, 2);
+});
+
+t("Ein laufendes Training wird nicht stillschweigend ueberschrieben", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 10; i++) D.trainDart(true);
+  ctx.answers.confirm = false;
+  D.setView("solo"); D.render();
+  ctx.click("train_around");
+  eq(D.getTrain().mode, "double", "das Doppel-Training laeuft weiter");
+  eq(D.getTrain().hits, 10, "mit allen Treffern");
+});
+
+// ================================================================ Modus-Wechsel
+t("Ein Wechsel des Eingabe-Modus zaehlt nichts doppelt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });                // zwei Darts, 40 Punkte
+  eq(D.getMatch().players[0].score, 461);
+  eq(D.getMatch().players[0].darts, 2);
+  ctx.click("imode", { "data-v": "sum" });           // mitten in der Aufnahme umschalten
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });           // die Aufnahme war 60
+  const p = D.getMatch().players[0];
+  eq(p.darts, 3, "drei Darts geworfen, nicht fuenf (war: " + p.darts + ")");
+  eq(p.score, 441, "60 Punkte abgezogen, nicht 100 (war: " + p.score + ")");
 });
 
 // ---------------------------------------------------------------- Ausgabe
