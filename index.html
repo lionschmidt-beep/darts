@@ -148,6 +148,12 @@
     align-items:center; justify-content:center; font-size:18px; font-weight:800; color:var(--muted);
     background:var(--card2);}
   .slot.filled{border-style:solid; border-color:var(--accent); color:var(--text);}
+  .slot.dead{border-color:var(--line); color:var(--muted); text-decoration:line-through;}
+  .lastturn{font-size:12.5px; color:var(--muted); text-align:center; margin:-4px 0 10px; line-height:1.4;}
+  .lastturn b{color:var(--text); font-weight:700;}
+  .lastturn.bust{color:var(--red);} .lastturn.bust b{color:var(--red);}
+  .lastturn.win{color:var(--gold);} .lastturn.win b{color:var(--gold);}
+  .lastturn.dead{color:var(--gold);}
   .turn .info{display:flex; justify-content:space-between; align-items:center; font-size:13px;}
   .turn .co{color:var(--gold); font-weight:700;}
   .turn .sum{color:var(--muted);} .turn .sum b{color:var(--text);}
@@ -249,7 +255,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.8";
+var VER    = "1.9";
 
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
@@ -296,8 +302,22 @@ function migrate(old){
 }
 // Felder nachziehen, die eine aeltere v2-Fassung noch nicht kannte.
 function upgradeShape(s){
-  if(!s.history) s.history=[];
-  if(!s.practice) s.practice=[];
+  if(!Array.isArray(s.history)) s.history=[];
+  if(!Array.isArray(s.practice)) s.practice=[];
+  // Fremde IDs koennten Anfuehrungszeichen enthalten und aus einem data-Attribut
+  // ausbrechen. Durch slug() ist das ausgeschlossen.
+  s.roster.forEach(function(p){
+    var clean = slug(String(p.id||p.name||""));
+    if(clean!==p.id){
+      var alt=p.id; p.id=clean;
+      (s.history||[]).forEach(function(m2){
+        (m2.players||[]).forEach(function(q){ if(q.id===alt) q.id=clean; });
+        if(m2.winnerId===alt) m2.winnerId=clean;
+      });
+      (s.practice||[]).forEach(function(r){ if(r.playerId===alt) r.playerId=clean; });
+      if(s.settings && s.settings.meId===alt) s.settings.meId=clean;
+    }
+  });
   if(!("train" in s)) s.train=null;
   if(!s.settings) s.settings=defaultSettings();
   var d=defaultSettings(); for(var k in d) if(!(k in s.settings)) s.settings[k]=d[k];
@@ -305,8 +325,16 @@ function upgradeShape(s){
     if(typeof p.winsManual!=="number") p.winsManual = (typeof p.wins==="number"?p.wins:0);
     delete p.wins;
   });
+  if(s.match && (!Array.isArray(s.match.players) || !s.match.players.length)) s.match=null;
   if(s.match){
     var m=s.match;
+    // Felder, ohne die der naechste Dart wirft. Fremde oder alte Sicherungen
+    // bringen sie nicht immer mit.
+    if(!Array.isArray(m._undo)) m._undo=[];
+    if(!Array.isArray(m.currentTurn)) m.currentTurn=[];
+    if(typeof m.currentIdx!=="number" || !m.players[m.currentIdx]) m.currentIdx=0;
+    if(typeof m.gameType!=="number") m.gameType=501;
+    if(typeof m.turnStartScore!=="number") m.turnStartScore=m.players[m.currentIdx].score;
     if(typeof m.legNo!=="number") m.legNo=1;
     if(typeof m.startIdx!=="number") m.startIdx=0;
     if(typeof m.bestOf!=="number") m.bestOf=1;
@@ -332,10 +360,25 @@ function load(){
   }catch(e){}
   return defaultState();
 }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+var LIVE_VIEWS = ["game","leg","win","train"];
+function save(){
+  try{
+    if(typeof view!=="undefined") state._view = LIVE_VIEWS.indexOf(view)>=0 ? view : "home";
+    localStorage.setItem(KEY, JSON.stringify(state));
+  }catch(e){}
+}
+// Welcher Bildschirm gilt nach einem Neustart? Nur einer, zu dem es auch einen
+// Zustand gibt - sonst landet man auf einem Screen ohne Daten.
+function restoreView(){
+  var v = state._view;
+  if(v==="train") return state.train ? "train" : "home";
+  if(v==="game" || v==="leg") return (state.match && !state.match.finished) ? v : "home";
+  if(v==="win")  return (state.match && state.match.finished) ? "win" : "home";
+  return "home";
+}
 
 var state = load();
-var view  = "home";      // home | roster | setup | game | leg | win | h2h | stats | settings
+var view  = restoreView();   // home | roster | setup | game | leg | win | h2h | player | solo | train | settings
 var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
 var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, bestOf}
 var h2hSel = null;       // [idA, idB] im Direktvergleich
@@ -348,6 +391,9 @@ var playerSel = null;    // offene Spieler-Akte
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
 // ---------------------------------------------------------------------------
 function dartValue(mult, num){
+  // Fehlwurf: der gedrueckte Multiplikator darf daraus kein "D0" machen - sonst
+  // eroeffnet ein Danebenwurf ein Doppel-In-Leg.
+  if(num===0)  return {value:0,  isDouble:false, label:"&ndash;"};
   if(num===25) return {value:25, isDouble:false, label:"25"};       // aeusserer Bull = Single
   if(num===50) return {value:50, isDouble:true,  label:"Bull"};     // Bull = Doppel-25
   var pre = mult===3 ? "T" : (mult===2 ? "D" : "");
@@ -366,7 +412,8 @@ ALLTHROWS.sort(function(a,b){return b.value-a.value;}); // "hoch zielen zuerst"
 // Kuerzestes Finish fuer 'score' mit hoechstens 'dartsLeft' Darts.
 // doubleOut=true -> der letzte Dart muss ein Doppel (oder Bull) sein.
 function checkout(score, dartsLeft, doubleOut){
-  if(score<=0 || score>170) return null;
+  if(dartsLeft<1) return null;
+  if(score<=0 || score > (doubleOut?170:180)) return null;
   var finishers = doubleOut ? DOUBLES : ALLTHROWS;
   var i,j,rem,d;
   // 1 Dart
@@ -471,7 +518,7 @@ function undo(){
 
 // Aufnahme abschliessen: erst die Statistik buchen, dann weiterreichen.
 // Nach einem Bust ist score wieder turnStartScore -> got=0, genau richtig.
-function closeTurn(){
+function closeTurn(kind){
   var m = state.match, p = m.players[m.currentIdx];
   var got = m.turnStartScore - p.score;
   if(got>0){
@@ -480,10 +527,16 @@ function closeTurn(){
     if(got>=100) p.tons++;
     if(got===180) p.oneEighties++;
   }
+  // Was der Vorgaenger geworfen hat, muss stehen bleiben. Sonst ist ein Bust
+  // vom Bildschirm nicht zu unterscheiden und "was hatt ich?" nicht zu beantworten.
+  m.lastTurn = {
+    id:p.id, name:p.name, kind:kind||"ok", sum:Math.max(0,got), rest:p.score,
+    labels:m.currentTurn.map(function(d){return d.label;})
+  };
 }
-function endTurn(){
+function endTurn(kind){
   var m = state.match;
-  closeTurn();
+  closeTurn(kind);
   m.currentTurn = [];
   m.currentIdx = (m.currentIdx+1) % m.players.length;
   m.turnStartScore = m.players[m.currentIdx].score;
@@ -494,7 +547,7 @@ function bust(){
   var m = state.match;
   var p = m.players[m.currentIdx];
   p.score = m.turnStartScore;   // ganzer Aufnahme-Wurf zurueck
-  endTurn();
+  endTurn("bust");
 }
 
 // Leg gewonnen: Zwischenstand oder Matchende. Der Anwurf wechselt jedes Leg.
@@ -521,22 +574,26 @@ function applyDart(mult, num){
   var dv = dartValue(mult, num);
   snapshot();
   var p = m.players[m.currentIdx];
-  m.currentTurn.push({label:dv.label, value:dv.value, isDouble:dv.isDouble});
   p.darts++; p.legDarts++;
+  curMult = 1;                  // gilt fuer JEDEN Ausgang - sonst bleibt Triple haengen
 
-  // Doppel-In: bis zum ersten Doppel zaehlt kein Wurf auf das Konto.
+  // Doppel-In: bis zum ersten Doppel zaehlt kein Wurf auf das Konto. Der Wurf
+  // wird mit Wert 0 gebucht, sonst zeigt die Aufnahme-Summe Punkte an, die
+  // nirgendwo abgezogen wurden.
   if(m.doubleIn && p.legStart && !dv.isDouble){
-    if(m.currentTurn.length>=3) endTurn();
+    m.currentTurn.push({label:dv.label, value:0, isDouble:false, nostart:true});
+    if(m.currentTurn.length>=3) endTurn("nostart");
     save(); render(); return "nostart";
   }
   if(m.doubleIn && p.legStart) p.legStart = false;
 
+  m.currentTurn.push({label:dv.label, value:dv.value, isDouble:dv.isDouble});
   var ns = p.score - dv.value;
 
   if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Leg ausgemacht
     var finishFrom = m.turnStartScore;
     p.score = 0;
-    closeTurn();
+    closeTurn(legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
     if(finishFrom > (p.checkout||0)) p.checkout = finishFrom;
     winLeg(p);
     save(); render(); return m.finished ? "win" : "leg";
@@ -546,7 +603,6 @@ function applyDart(mult, num){
     bust(); save(); render(); return "bust";
   }
   p.score = ns;
-  curMult = 1;                                          // Multiplikator zurueck auf Single
   if(m.currentTurn.length>=3) endTurn();
   save(); render(); return "ok";
 }
@@ -567,7 +623,15 @@ function finishMatch(){
       })
     };
     state.history.unshift(rec);
-    if(state.history.length>500) state.history.length = 500;
+    // Deckeln, aber nichts unterschlagen: der aelteste Sieg wird eingefroren,
+    // sonst sinkt die Rangliste beim 501. Spiel stillschweigend.
+    while(state.history.length>500){
+      var drop = state.history.pop();
+      if(drop && drop.players && drop.players.length>=2 && drop.winnerId){
+        var rr = rosterOf(drop.winnerId);
+        if(rr) rr.winsManual = (rr.winsManual||0)+1;
+      }
+    }
   }
   state.match = null; save();
   return rec;
@@ -640,16 +704,31 @@ function renderHome(){
       + '<div class="chev">&rsaquo;</div>'
       + '</div>';
   }).join("");
-  var resume = (m && !m.finished)
-    ? '<button class="btn primary fab" data-act="resume">&#9654;&nbsp; Spiel fortsetzen ('
+  var resume = "";
+  if(m && !m.finished){
+    resume = '<button class="btn primary fab" data-act="resume">&#9654;&nbsp; Spiel fortsetzen ('
       + m.players.map(function(p){return esc(p.name)+" "+p.score;}).join(" &middot; ") + ')</button>'
-      + '<button class="btn ghost sm" data-act="abort" style="width:auto;margin:6px auto 0">Aktuelles Spiel verwerfen</button>'
-    : '';
+      + '<button class="btn ghost sm" data-act="abort" style="width:auto;margin:6px auto 0">Aktuelles Spiel verwerfen</button>';
+  } else if(m && m.finished){
+    // Ausgemacht, aber nie eingetragen (App weggewischt). Ohne diesen Weg
+    // waere das Spiel fuer Rangliste und Duellbilanz verloren.
+    var w = m.players.find(function(p){return p.id===m.winnerId;});
+    resume = '<button class="btn primary fab" data-act="nav" data-view="win">&#127942;&nbsp; Ergebnis eintragen ('
+      + esc(w?w.name:"?") + ' hat gewonnen)</button>';
+  }
+  var tr0 = state.train;
+  if(tr0 && !tr0.done){
+    resume += '<button class="btn'+(resume?"":" primary")+'" data-act="resumetrain" style="margin-top:'
+      + (resume?"8":"0") + 'px">&#127919;&nbsp; Übung fortsetzen ('
+      + esc(nameOf(tr0.playerId)) + ' &middot; Ziel ' + (tr0.idx+1) + ' von ' + TRAIN[tr0.mode].max + ')</button>';
+  }
   return h()
     + (resume ? '<div style="margin-bottom:12px">'+resume+'</div>' : '')
     + '<div class="card" style="margin-bottom:14px"><div style="font-size:13px;color:var(--muted);'
       + 'font-weight:700;margin-bottom:4px;display:flex;justify-content:space-between">'
-      + '<span>RANGLISTE</span><span style="font-weight:600">Spieler &rsaquo;</span></div>'+rows+'</div>'
+      + '<span>RANGLISTE</span>'
+      + '<span data-act="nav" data-view="roster" style="font-weight:600">Team &rsaquo;</span></div>'
+      + rows + '</div>'
     + duelCard()
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
@@ -694,8 +773,11 @@ function renderRoster(){
 
 function renderSetup(){
   if(!setupSel){
-    setupSel = {selected:new Set(state.roster.slice(0,3).map(function(p){return p.id;})),
-                gameType:501, doubleOut:true};
+    var st0 = state.settings;
+    var pre = state.roster.filter(function(p){return !p.guest;}).slice(0,3).map(function(p){return p.id;});
+    if(!pre.length) pre = state.roster.slice(0,1).map(function(p){return p.id;});
+    setupSel = {selected:new Set(pre), gameType:st0.gameType, doubleOut:!!st0.doubleOut,
+                doubleIn:!!st0.doubleIn, bestOf:st0.bestOf||1};
   }
   var picks = state.roster.map(function(p){
     var on = setupSel.selected.has(p.id);
@@ -751,6 +833,25 @@ function gameHead(m, multi){
   return parts.length ? '<div class="legline">'+parts.join(' &nbsp;&middot;&nbsp; ')+'</div>' : '';
 }
 
+// Was zuletzt passiert ist - in Worten. Ohne diese Zeile ist ein Bust auf dem
+// Bildschirm von "nichts passiert" nicht zu unterscheiden.
+function lastTurnLine(m){
+  var lt = m.lastTurn;
+  if(!lt || !lt.labels || !lt.labels.length) return '';
+  var wuerfe = lt.labels.join(' ');
+  if(lt.kind==="bust")
+    return '<div class="lastturn bust">&#128165; <b>'+esc(lt.name)+'</b> '+wuerfe
+      + ' &middot; überworfen, zurück auf <b>'+lt.rest+'</b></div>';
+  if(lt.kind==="nostart")
+    return '<div class="lastturn dead">&#9888;&#65039; <b>'+esc(lt.name)+'</b> '+wuerfe
+      + ' &middot; noch kein Doppel &ndash; zählt nicht</div>';
+  if(lt.kind==="leg" || lt.kind==="win")
+    return '<div class="lastturn win">&#127919; <b>'+esc(lt.name)+'</b> '+wuerfe
+      + ' &middot; ausgemacht</div>';
+  return '<div class="lastturn">Zuletzt <b>'+esc(lt.name)+'</b> '+wuerfe
+    + ' = <b>'+lt.sum+'</b> &middot; Rest '+lt.rest+'</div>';
+}
+
 function renderGame(){
   var m = state.match;
   var cur = m.players[m.currentIdx];
@@ -768,11 +869,15 @@ function renderGame(){
   var slots = "";
   for(var i=0;i<3;i++){
     var d = m.currentTurn[i];
-    slots += '<div class="slot'+(d?" filled":"")+'">'+(d?esc(d.label):"&middot;")+'</div>';
+    var cls = d ? (d.nostart ? " filled dead" : " filled") : "";
+    slots += '<div class="slot'+cls+'">'+(d?d.label:"&middot;")+'</div>';
   }
   var turnSum = m.currentTurn.reduce(function(s,d){return s+d.value;},0);
-  var co = checkout(cur.score, 3-m.currentTurn.length, m.doubleOut);
-  var coHtml = co ? '<span class="co">Finish: '+co.join(" ")+'</span>' : '<span class="muted">&nbsp;</span>';
+  var co = (m.doubleIn && cur.legStart)
+    ? null : checkout(cur.score, 3-m.currentTurn.length, m.doubleOut);
+  var coHtml = (m.doubleIn && cur.legStart)
+    ? '<span class="co">Doppel-In: erst ein Doppel eröffnet</span>'
+    : (co ? '<span class="co">Finish: '+co.join(" ")+'</span>' : '<span class="muted">&nbsp;</span>');
 
   function mb(mv,l){ return '<button class="btn'+(curMult===mv?" on":"")+'" data-act="mult" data-m="'+mv+'">'+l+'</button>'; }
   var nums = "";
@@ -785,6 +890,7 @@ function renderGame(){
     + '<div class="slots">'+slots+'</div>'
     + '<div class="info">'+coHtml+'<span class="sum">Aufnahme: <b>'+turnSum+'</b></span></div>'
     + '</div>'
+    + lastTurnLine(m)
     + '<div class="mult">'+mb(1,"Single")+mb(2,"Double")+mb(3,"Triple")+'</div>'
     + '<div class="pad">'+nums
     + '<button class="btn miss" data-act="num" data-n="0">Miss</button>'
@@ -927,7 +1033,16 @@ function allDuels(){
   return out;
 }
 
-function nameOf(id){ var r = rosterOf(id); return r ? r.name : id; }
+// Ein geloeschter Spieler steht weiter in der Historie - dort steht auch sein
+// Name. Ohne diesen Rueckgriff zeigt die App den rohen Schluessel ("arne").
+function nameOf(id){
+  var r = rosterOf(id); if(r) return r.name;
+  for(var i=0;i<state.history.length;i++){
+    var ps = state.history[i].players||[];
+    for(var j=0;j<ps.length;j++) if(ps[j].id===id && ps[j].name) return ps[j].name;
+  }
+  return id;
+}
 
 function renderH2H(){
   // Solange Lion nicht selbst gewaehlt hat, zeigt der Screen immer das zuletzt
@@ -1060,12 +1175,18 @@ function exportClipboard(){
 }
 // Import: ersetzt den kompletten Stand. Wird nur nach Rueckfrage aufgerufen.
 function importText(txt){
-  var obj;
-  try{ obj = JSON.parse(txt); }catch(e){ return "Das ist keine gültige Sicherung."; }
-  var st = obj && obj.state ? obj.state : obj;
-  if(!st || !st.roster || !st.roster.length) return "In der Datei steht kein Team.";
-  state = upgradeShape(st);
-  h2hSel = null; h2hAuto = true; setupSel = null;
+  var neu;
+  try{
+    var obj = JSON.parse(txt);
+    var st = obj && obj.state ? obj.state : obj;
+    if(!st || !Array.isArray(st.roster) || !st.roster.length) return "In der Datei steht kein Team.";
+    neu = upgradeShape(st);
+  }catch(e){
+    return "Die Sicherung ist beschädigt und wurde nicht eingespielt.";
+  }
+  state = neu;
+  h2hSel = null; h2hAuto = true; setupSel = null; playerSel = null; soloWho = null;
+  view = restoreView();
   save();
   return null;
 }
@@ -1196,11 +1317,27 @@ function finishTraining(){
     rec = {id:mid(), ts:tr.ts, ended:Date.now(), mode:tr.mode, playerId:tr.playerId,
            score:tr.hits, max:TRAIN[tr.mode].max, darts:tr.darts};
     state.practice.unshift(rec);
-    if(state.practice.length>300) state.practice.length = 300;
+    capPractice();
   }
   state.train = null; save();
   return rec;
 }
+// Alte Uebungslaeufe wegwerfen, aber nie einen Rekord: der steht oft ganz
+// hinten, weil er schon lange haelt.
+function capPractice(){
+  if(state.practice.length<=300) return;
+  var keep = {};
+  state.practice.forEach(function(r){
+    var k = r.playerId+"|"+r.mode, b = keep[k];
+    if(!b || r.score>b.score || (r.score===b.score && r.darts<b.darts)) keep[k] = r;
+  });
+  var behalten = state.practice.slice(0,300);
+  var drin = {};
+  behalten.forEach(function(r){ drin[r.id] = true; });
+  for(var k2 in keep) if(!drin[keep[k2].id]) behalten.push(keep[k2]);
+  state.practice = behalten;
+}
+
 // Bester Wert eines Spielers in einem Trainingsmodus.
 function bestPractice(playerId, mode){
   var b = null;
@@ -1266,7 +1403,7 @@ function renderTrain(){
 
   if(tr.done){
     var quote = tr.darts ? Math.round(tr.hits/tr.darts*100) : 0;
-    var isBest = !best || tr.hits>best.score;
+    var isBest = !best || tr.hits>best.score || (tr.hits===best.score && tr.darts<best.darts);
     return h()
       + '<div class="win"><div class="trophy">'+(isBest?'&#127942;':'&#127919;')+'</div>'
       + '<h2>'+tr.hits+' von '+cfg.max+'</h2>'
@@ -1576,6 +1713,12 @@ function updateVoiceStatus(msg){
 // -- Erkanntes umsetzen: Kommandos, Namens-Check, dann Wuerfe eintragen + Rueckmeldung
 function applySpokenResult(p, rawTxt){
   var m=state.match; if(!m || m.finished) return;
+  // Zwischen zwei Legs bleibt das Mikro absichtlich an. Ein Wurf darf dann aber
+  // nicht ins naechste Leg rutschen, waehrend auf dem Schirm noch der Zwischenstand steht.
+  if(view==="leg" && !(p.cmd==="skip" || p.cmd==="stop" || p.cmd==="undo")){
+    updateVoiceStatus('Leg ist zu Ende &ndash; sag „weiter“ für das nächste.');
+    say("Leg ist zu Ende. Sag weiter."); return;
+  }
   if(p.cmd && p.throws.length===0){
     if(p.cmd==="undo"){ undo(); updateVoiceStatus("&#8617;&#65039; letzter Wurf zurück"); say("Zurück"); return; }
     if(p.cmd==="skip"){
@@ -1639,9 +1782,10 @@ document.getElementById("app").addEventListener("click", function(ev){
     view=t.getAttribute("data-view");
     if(view==="setup") setupSel=null;
     if(view!=="settings") settingsMsg="";
-    render(); return;
+    save(); render(); return;
   }
-  if(act==="resume"){ view="game"; render(); return; }
+  if(act==="resume"){ view="game"; save(); render(); return; }
+  if(act==="resumetrain"){ view="train"; save(); render(); return; }
   if(act==="abort"){ if(confirm("Aktuelles Spiel verwerfen?")){ state.match=null; save(); render(); } return; }
 
   // Roster
@@ -1815,7 +1959,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   render:render, getMatch:function(){return state.match;},
   finishMatch:finishMatch, undo:undo, endTurn:endTurn, legsNeeded:legsNeeded,
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
-  meId:meId, orderPair:orderPair, importText:importText,
+  meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
   startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,
   finishTraining:finishTraining, bestPractice:bestPractice, bestSolo:bestSolo,

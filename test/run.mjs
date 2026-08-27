@@ -24,7 +24,8 @@ function makeEl() {
 function boot(seedStorage = {}) {
   const store = new Map(Object.entries(seedStorage));
   const app = makeEl();
-  const els = { app };
+  const els = { app, newName: makeEl(), voiceStatus: makeEl(), impFile: makeEl() };
+  const answers = { confirm: true, prompt: null };
   const win = {
     localStorage: {
       getItem: k => (store.has(k) ? store.get(k) : null),
@@ -39,8 +40,8 @@ function boot(seedStorage = {}) {
     addEventListener: () => {},
     navigator: { userAgent: "test" },              // ohne serviceWorker: SW-Zweig bleibt aus
     location: { protocol: "http:", href: "http://localhost/" },
-    confirm: () => true,
-    prompt: () => null,
+    confirm: () => answers.confirm,
+    prompt: () => answers.prompt,
     alert: () => {},
     setTimeout, clearTimeout,
     console,
@@ -48,8 +49,44 @@ function boot(seedStorage = {}) {
   win.window = win;
   vm.createContext(win);
   vm.runInContext(code, win, { filename: "index.html#script" });
-  return { win, D: win.DARTS, app, store };
+
+  // --- Der echte Klick-Handler, so wie ihn ein Finger ausloest ------------
+  // Ohne den ueberspringt jeder Test die Kette Screen -> UI-State -> Logik,
+  // und genau dort sassen zwei Fehler, die 73 gruene Tests nicht sahen.
+  function findTag(html, act, filter) {
+    const re = /<[a-z][^>]*?data-act="([^"]+)"[^>]*?>/gi;
+    let m;
+    while ((m = re.exec(html))) {
+      if (m[1] !== act) continue;
+      const attrs = {};
+      const are = /([a-z][a-z0-9-]*)="([^"]*)"/gi;
+      let a;
+      while ((a = are.exec(m[0]))) attrs[a[1]] = a[2];
+      if (!filter || Object.keys(filter).every(k => attrs[k] === String(filter[k]))) return attrs;
+    }
+    return null;
+  }
+  function click(act, filter) {
+    const attrs = findTag(app.innerHTML, act, filter);
+    if (!attrs) {
+      throw new Error('kein klickbares Element data-act="' + act + '"' +
+        (filter ? " " + JSON.stringify(filter) : "") + " im aktuellen Screen");
+    }
+    const el = { getAttribute: k => (k in attrs ? attrs[k] : null) };
+    el.closest = () => el;
+    app._listeners.click({ target: el });
+    return attrs;
+  }
+  const has = (act, filter) => !!findTag(app.innerHTML, act, filter);
+  // Klasse eines Elements lesen - fuer "ist der Knopf markiert?"
+  function classOf(act, filter) {
+    const t = findTag(app.innerHTML, act, filter);
+    return t ? (t.class || "") : null;
+  }
+  return { win, D: win.DARTS, app, store, click, has, classOf, findTag, els, answers };
 }
+// Neustart aus dem gespeicherten Zustand - simuliert Reload / App-Kill auf dem Handy.
+function reboot(ctx) { return boot(Object.fromEntries(ctx.store)); }
 
 // ---------------------------------------------------------------- Mini-Framework
 let pass = 0, fail = 0;
@@ -339,7 +376,7 @@ t("parseSpeech: Kommandos und Bull", () => {
   eq(D.parseSpeech("weiter", []).cmd, "skip");
   eq(D.parseSpeech("Bull", []).throws[0].label, "Bull");
   eq(D.parseSpeech("daneben daneben daneben", []).throws.map(x => x.num), [0, 0, 0]);
-  eq(D.parseSpeech("daneben", []).throws[0].label, "0", "Fehlwurf traegt 0 ein");
+  eq(D.parseSpeech("daneben", []).throws[0].label, "&ndash;", "Fehlwurf hat kein Doppel-Label");
 });
 
 // ================================================================ Rendering
@@ -898,6 +935,348 @@ t("Service Worker holt zuerst aus dem Netz", () => {
      "network-first: sonst nagelt der SW eine alte Version auf dem Handy fest");
   ok(sw.includes("skipWaiting"), "neue Fassung uebernimmt sofort");
   ok(sw.includes("caches.delete"), "alte Caches werden geraeumt");
+});
+
+// ================================================================ Echte Bedienung
+// Diese Gruppe fuehrt den Klick-Handler aus statt window.DARTS direkt. Genau
+// dazwischen sassen die Fehler, die 73 gruene Tests nicht gesehen haben.
+
+t("Der Setup-Screen zeigt, was danach wirklich gespielt wird", () => {
+  const ctx = boot();
+  const st = ctx.D.getState().settings;
+  st.gameType = 301; st.doubleOut = false; st.bestOf = 5; st.doubleIn = true;
+  ctx.D.setView("home"); ctx.D.render();
+  ctx.click("nav", { "data-view": "setup" });
+
+  ok(/\bon\b/.test(ctx.classOf("gt", { "data-g": 301 }) || ""), "301 ist markiert");
+  ok(/\bon\b/.test(ctx.classOf("bo", { "data-n": 5 }) || ""), "Bo5 ist markiert");
+  ok(/\bon\b/.test(ctx.classOf("do", { "data-v": 0 }) || ""), "beliebiger Ausgang ist markiert");
+  ok(/\bon\b/.test(ctx.classOf("din") || ""), "Doppel-In ist markiert");
+
+  ctx.click("start");
+  const m = ctx.D.getMatch();
+  eq(m.gameType, 301, "gespielt wird, was auf dem Schirm stand");
+  eq(m.doubleOut, false);
+  eq(m.bestOf, 5);
+  eq(m.doubleIn, true);
+});
+
+t("Im Setup umgestellt heisst im Spiel umgestellt", () => {
+  const ctx = boot();
+  ctx.D.setView("home"); ctx.D.render();
+  ctx.click("nav", { "data-view": "setup" });
+  ctx.click("gt", { "data-g": 701 });
+  ctx.click("bo", { "data-n": 3 });
+  ctx.click("do", { "data-v": 0 });
+  ctx.click("start");
+  const m = ctx.D.getMatch();
+  eq(m.gameType, 701);
+  eq(m.bestOf, 3);
+  eq(m.doubleOut, false);
+  eq(m.players[0].score, 701);
+});
+
+t("Ein gewonnenes Spiel ueberlebt das Wegwischen der App", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.D.setScore(0, 40);
+  eq(throwDart(ctx.D, "D20"), "win");
+  // Handy zugeklappt, PWA gekillt, App neu geoeffnet - OHNE auf "Speichern" zu tippen
+  const nach = reboot(ctx);
+  nach.D.setView("home"); nach.D.render();
+  ok(nach.D.getHistory().length === 1 || nach.has("nav", { "data-view": "win" }) ||
+     nach.has("resume"),
+     "entweder ist der Sieg gebucht oder die Startseite bietet einen Weg zurueck - " +
+     "sonst ist das Spiel spurlos weg");
+});
+
+t("Ein laufendes Training ueberlebt den Neustart auffindbar", () => {
+  const ctx = boot();
+  ctx.D.startTraining("double", "lion");
+  ctx.D.trainDart(true); ctx.D.trainDart(true);
+  const nach = reboot(ctx);
+  eq(nach.D.getTrain() && nach.D.getTrain().idx, 2, "der Lauf liegt noch im Speicher");
+  nach.D.setView("home"); nach.D.render();
+  const homeWeg = nach.has("nav", { "data-view": "train" }) || nach.has("resumetrain");
+  nach.D.setView("solo"); nach.D.render();
+  const soloWeg = nach.has("nav", { "data-view": "train" }) || nach.has("resumetrain");
+  ok(homeWeg || soloWeg,
+     "es muss einen anklickbaren Weg zurueck geben - ein Lauf, den nur der Speicher kennt, " +
+     "blockiert stumm den naechsten Start");
+});
+
+t("Auf dem Leg-Zwischenstand landet keine Ansage im naechsten Leg", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setScore(0, 40); eq(throwDart(D, "D20"), "leg");
+  eq(D.getView(), "leg", "wir stehen auf dem Zwischenstand");
+  const vorher = D.getMatch().players.map(p => p.score);
+  D.applySpokenResult(D.parseSpeech("triple 20 triple 20 triple 20", []), "triple 20 ...");
+  eq(D.getMatch().players.map(p => p.score), vorher,
+     "kein Wurf darf gebucht werden, solange der Zwischenstand steht");
+});
+
+t("Ein Fehlwurf ist nie ein Doppel - auch nicht mit gedruecktem Double", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  eq(D.dartValue(2, 0).isDouble, false, "D0 gibt es nicht");
+  eq(D.dartValue(3, 0).isDouble, false);
+  D.startMatch(["lion"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.applyDart(2, 0);                                  // Double gedrueckt, danebengeworfen
+  eq(D.getMatch().players[0].legStart, true, "das Leg ist damit NICHT eroeffnet");
+  D.applyDart(1, 20);
+  eq(D.getMatch().players[0].score, 501, "und der naechste Single zaehlt weiterhin nicht");
+});
+
+t("Ueberworfen steht auf dem Bildschirm, nicht nur im Sprachmodus", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  D.setView("game"); D.render();
+  ctx.click("num", { "data-n": 20 });                 // 40 -> 20
+  ctx.click("num", { "data-n": 20 });                 // 0 ohne Doppel -> Bust
+  ok(/überworfen|Überworfen|Bust/i.test(ctx.app.innerHTML),
+     "der Spieler muss sehen, dass die Aufnahme verfallen ist");
+});
+
+t("Doppel-In zeigt keinen Wurf an, den es nicht zaehlt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("mult", { "data-m": 3 });
+  ctx.click("num", { "data-n": 20 });                 // T20, zaehlt nicht (noch nicht drin)
+  const html = ctx.app.innerHTML;
+  ok(!/Aufnahme: <b>60<\/b>/.test(html),
+     "eine Aufnahme-Summe von 60 ist gelogen, wenn 0 gezaehlt wurde");
+  ok(/\bon\b/.test(ctx.classOf("mult", { "data-m": 1 }) || ""),
+     "der Multiplikator faellt auf Single zurueck, sonst wird der naechste Wurf verdreifacht");
+});
+
+t("Nichts sieht klickbar aus, was nicht klickbar ist", () => {
+  const ctx = boot();
+  ctx.D.setView("home"); ctx.D.render();
+  // Alle Pfeil-Elemente im Kartenkopf muessen ein data-act tragen
+  const koepfe = ctx.app.innerHTML.match(/<div class="cardhead">[\s\S]*?<\/div>/g) || [];
+  koepfe.forEach(k => {
+    const pfeile = k.match(/<span[^>]*>[^<]*&rsaquo;[^<]*<\/span>/g) || [];
+    pfeile.forEach(sp => {
+      ok(/data-act=/.test(sp), "toter Pfeil im Kartenkopf: " + sp);
+    });
+  });
+});
+
+// ================================================================ Neustart-Festigkeit
+t("Nach dem Neustart steht man wieder im laufenden Spiel", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  throwDart(ctx.D, "T20");
+  const nach = reboot(ctx);
+  eq(nach.D.getView(), "game", "direkt zurueck ins Spiel, nicht auf die Startseite");
+  nach.D.render();
+  ok(nach.has("num", { "data-n": 20 }), "das Zahlenfeld ist sofort da");
+  eq(nach.D.getMatch().players[0].score, 441, "der Stand stimmt");
+});
+
+t("Nach dem Neustart steht der Sieger-Screen wieder da", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.D.setScore(0, 40); throwDart(ctx.D, "D20");
+  const nach = reboot(ctx);
+  eq(nach.D.getView(), "win", "der Sieg wartet dort, wo man ihn verlassen hat");
+  nach.D.render();
+  ok(nach.has("winhome"), "und laesst sich eintragen");
+  nach.click("winhome");
+  eq(nach.D.getHistory().length, 1, "eingetragen");
+  eq(nach.D.totalWins("lion"), 2);
+});
+
+t("Nach dem Neustart laeuft das Training weiter", () => {
+  const ctx = boot();
+  ctx.D.startTraining("double", "lion");
+  ctx.D.trainDart(true); ctx.D.trainDart(true);
+  const nach = reboot(ctx);
+  eq(nach.D.getView(), "train");
+  nach.D.render();
+  ok(nach.has("thit"), "Treffer-Knopf ist da");
+  eq(nach.D.trainTarget().short, "D3", "genau dort, wo aufgehoert wurde");
+});
+
+t("Ein gemerkter Screen ohne Zustand faellt auf die Startseite zurueck", () => {
+  // Bildschirm "game" gemerkt, aber das Match wurde inzwischen verworfen
+  const ctx = boot();
+  ctx.D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  const roh = JSON.parse(ctx.store.get("darts_v2"));
+  eq(roh._view, "game");
+  roh.match = null;
+  const nach = boot({ darts_v2: JSON.stringify(roh) });
+  eq(nach.D.getView(), "home", "kein leerer Spielbildschirm");
+  nach.D.render();
+  ok(nach.app.innerHTML.includes("Neues Spiel"), "Startseite ist da");
+});
+
+t("Ein beendetes Match zeigt keinen Fortsetzen-Knopf", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.D.setScore(0, 40); throwDart(ctx.D, "D20");
+  const nach = reboot(ctx);
+  nach.D.setView("home"); nach.D.render();
+  ok(!nach.has("resume"), "nichts fortzusetzen - das Spiel ist zu Ende");
+  ok(nach.has("nav", { "data-view": "win" }), "stattdessen: Ergebnis eintragen");
+});
+
+// ================================================================ Datenintegritaet
+t("Der 500er-Deckel der Historie frisst keine Wins", () => {
+  const { D } = boot();
+  const st = D.getState();
+  // 500 alte Siege von Lion vorbelegen
+  st.history = [];
+  for (let i = 0; i < 500; i++) {
+    st.history.push({ id: "h" + i, ts: i, ended: i, mode: "x01", gameType: 501,
+      bestOf: 1, winnerId: "lion",
+      players: [{ id: "lion", name: "Lion", legsWon: 1, darts: 9, scored: 501 },
+                { id: "arne", name: "Arne", legsWon: 0, darts: 9, scored: 200 }] });
+  }
+  const vorher = D.totalWins("lion");
+  eq(vorher, 501, "1 von Hand + 500 gespielt");
+  playMatch(D, ["lion", "arne"], 0);                  // 501. Sieg -> aeltester faellt raus
+  eq(D.getHistory().length, 500, "Deckel haelt");
+  eq(D.totalWins("lion"), vorher + 1,
+     "der abgeschnittene Sieg muss in den Handeintrag wandern, sonst verschwindet er");
+});
+
+t("Der Trainings-Deckel frisst keinen Rekord", () => {
+  const { D } = boot();
+  const st = D.getState();
+  st.practice = [];
+  for (let i = 0; i < 300; i++) {
+    st.practice.push({ id: "p" + i, ts: i, ended: i, mode: "double",
+                       playerId: "lion", score: i === 299 ? 21 : 1, max: 21, darts: 21 });
+  }
+  eq(D.bestPractice("lion", "double").score, 21, "der Rekord steht");
+  // Ein neuer Lauf schiebt den aeltesten raus - der Rekord liegt aber ganz hinten
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 63; i++) D.trainDart(false);
+  D.finishTraining();
+  eq(D.bestPractice("lion", "double").score, 21,
+     "ein Rekord darf nicht hinten aus der Liste fallen");
+});
+
+t("Eine strukturell kaputte Sicherung crasht nicht", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne"], 0);
+  const kaputt = [
+    JSON.stringify({ state: { roster: [{ id: "x", name: "X" }], match: {} } }),
+    JSON.stringify({ state: { roster: [{ id: "x", name: "X" }], match: { players: null } } }),
+    JSON.stringify({ state: { roster: null } }),
+    JSON.stringify({ state: { roster: [{ id: "x", name: "X" }], history: "keine liste" } }),
+  ];
+  kaputt.forEach((k, i) => {
+    let err = null;
+    try { err = D.importText(k); }
+    catch (e) { throw new Error("Variante " + i + " wirft statt abzuweisen: " + e.message); }
+    ok(typeof err === "string" || err === null, "Variante " + i + " liefert ein Ergebnis");
+  });
+  // Die App muss danach noch bedienbar sein
+  D.setView("home"); D.render();
+  ok(D.getRoster().length > 0, "es gibt noch ein Team");
+});
+
+t("Die Fehlermeldung sagt, WAS mit der Sicherung nicht stimmt", () => {
+  const { D } = boot();
+  const kein = [
+    JSON.stringify({ state: { roster: [] } }),
+    JSON.stringify({ state: { roster: null } }),
+    JSON.stringify({ state: {} }),
+  ];
+  kein.forEach((k, i) => {
+    const err = D.importText(k);
+    ok(/Team/.test(err || ""),
+       "Variante " + i + ' muss "kein Team" melden, nicht "beschädigt" - ' +
+       "sonst sucht man den Fehler an der falschen Stelle. War: " + err);
+  });
+  ok(/beschädigt/.test(D.importText("{kein json") || "") ||
+     /gültige/.test(D.importText("{kein json") || ""),
+     "echter Datenmuell meldet dagegen Beschaedigung");
+});
+
+t("Nach dem Import einer Sicherung mit laufendem Spiel geht das Werfen weiter", () => {
+  const A = boot();
+  A.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  throwDart(A.D, "T20");
+  const json = JSON.stringify(A.D.exportPayload());
+  // Undo-Stapel und Aufnahme aus der Sicherung entfernen - so sehen fremde/alte Staende aus
+  const obj = JSON.parse(json);
+  delete obj.state.match._undo;
+  delete obj.state.match.currentTurn;
+  delete obj.state.match.turnStartScore;
+
+  const B = boot();
+  eq(B.D.importText(JSON.stringify(obj)), null, "Import geht durch");
+  let err = null;
+  try { throwDart(B.D, "20"); } catch (e) { err = e.message; }
+  eq(err, null, "der naechste Dart darf nicht werfen: " + err);
+  ok(B.D.getMatch().players[0].score < 501, "und er wird gezaehlt");
+});
+
+t("Ein geloeschter Spieler wird nicht zum Phantom", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 0);
+  const st = D.getState();
+  st.roster = st.roster.filter(p => p.id !== "arne");   // Arne geloescht
+  D.setView("h2h"); D.render();
+  ok(!/vs\s*arne\b/.test(ctx.app.innerHTML),
+     "kein roher Slug als Name - der Name steht in der Historie");
+  ok(/Arne/.test(ctx.app.innerHTML) || !/arne/.test(ctx.app.innerHTML),
+     "entweder der echte Name oder gar nicht");
+});
+
+t("Trainings-Rekordmeldung stimmt mit dem ueberein, was gespeichert wird", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  // Lauf 1: 1 Treffer, aber erst im dritten Versuch -> 63 Darts
+  D.startTraining("double", "lion");
+  D.trainDart(false); D.trainDart(false); D.trainDart(true);   // D1 im 3. Versuch
+  for (let i = 0; i < 60; i++) D.trainDart(false);             // 20 Ziele x 3 Fehler
+  D.finishTraining();
+  const alt = D.bestPractice("lion", "double");
+  eq(alt.score, 1); eq(alt.darts, 63);
+  // Lauf 2: gleicher Score, Treffer sofort -> 61 Darts. Das IST ein Rekord.
+  D.startTraining("double", "lion");
+  D.trainDart(true);
+  for (let i = 0; i < 60; i++) D.trainDart(false);
+  D.setView("train"); D.render();
+  const meldung = ctx.app.innerHTML;
+  const gemeldet = /Neuer Rekord/.test(meldung);
+  D.finishTraining();
+  const neu = D.bestPractice("lion", "double");
+  const wirklich = neu.darts < alt.darts || neu.score > alt.score;
+  eq(gemeldet, wirklich,
+     "die Meldung auf dem Schirm und der gespeicherte Rekord duerfen nicht auseinanderlaufen");
+});
+
+t("Eine importierte Spieler-ID kann kein HTML einschleusen", () => {
+  const ctx = boot();
+  const boese = '{"state":{"roster":[{"id":"x\\" data-evil=\\"1","name":"Boese","winsManual":0}],' +
+                '"match":null,"history":[],"practice":[]}}';
+  eq(ctx.D.importText(boese), null, "Import geht durch");
+  ctx.D.setView("roster"); ctx.D.render();
+  ok(!/data-evil=/.test(ctx.app.innerHTML), "kein fremdes ATTRIBUT im HTML");
+  eq(ctx.D.getRoster()[0].id, "x-data-evil-1", "die ID ist entschaerft, nicht nur maskiert");
+  ok(ctx.has("setme", { "data-id": "x-data-evil-1" }), "und bleibt bedienbar");
+});
+
+t("checkout kennt seine Grenzen", () => {
+  const { D } = boot();
+  eq(D.checkout(40, 0, true), null, "ohne Darts geht gar nichts");
+  eq(D.checkout(180, 3, false), ["T20", "T20", "T20"],
+     "ohne Doppel-Out sind 180 in drei Darts ausspielbar");
+  eq(D.checkout(181, 3, false), null);
+  eq(D.checkout(170, 3, true), ["T20", "T20", "Bull"], "mit Doppel-Out bleibt 170 die Grenze");
+  eq(D.checkout(171, 3, true), null);
 });
 
 // ---------------------------------------------------------------- Ausgabe
