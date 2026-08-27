@@ -164,6 +164,19 @@
   .mult .btn{flex:1; min-height:46px;}
   .mult .btn.on{background:var(--accent); color:#08240f; border-color:transparent;}
 
+  .modeseg{margin-bottom:9px;}
+  .modeseg .btn{min-height:42px; font-size:14px;}
+  .sumbox{background:var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:14px; text-align:center; margin-bottom:9px;}
+  .sumval{font-size:42px; font-weight:800; line-height:1.05; letter-spacing:-1px;}
+  .sumval.empty{font-size:17px; color:var(--muted); font-weight:600; padding:12px 0 11px;}
+  .sumrest{font-size:12.5px; color:var(--muted); margin-top:5px;}
+  .sumrest b{color:var(--text);} .sumrest .w{color:var(--gold); font-weight:600;}
+  .sumpad{display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
+  .sumpad .btn{min-height:58px; font-size:22px; border-radius:13px;}
+  .sumfinish{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px;}
+  .sumfinish .sflabel{font-size:14px; font-weight:600; text-align:center; margin-bottom:11px;}
+  .sumfinish .btn{min-height:58px; font-size:20px;}
   .pad{display:grid; grid-template-columns:repeat(5,1fr); gap:7px;}
   .pad .btn{min-height:52px; font-size:18px; padding:0; border-radius:12px; background:var(--card2);}
   .pad .btn.bull{color:var(--red);} .pad .btn.miss{color:var(--muted);}
@@ -259,11 +272,12 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.10";
+var VER    = "1.11";
 
+function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
-           tts:true, keepHistory:true, meId:"lion" };
+           tts:true, keepHistory:true, meId:"lion", inputMode:"single" };
 }
 function defaultState(){
   return {
@@ -390,6 +404,8 @@ var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Bl
 var settingsMsg = "";    // kurze Rueckmeldung im Einstellungs-Screen
 var soloWho = null;      // wer gerade allein uebt
 var playerSel = null;    // offene Spieler-Akte
+var sumInput = "";       // getippte Aufnahme-Summe
+var pendingFinish = null; // Summe, die ausmacht - wartet auf die Dart-Zahl
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -875,6 +891,84 @@ function lastTurnLine(m){
     + ' = <b>'+lt.sum+'</b> &middot; Rest '+lt.rest+'</div>';
 }
 
+// ---------------------------------------------------------------------------
+// Summen-Eingabe: die ganze Aufnahme auf einmal
+// An der Scheibe ruft einer "einundachtzig" - dann will man 81 tippen und nicht
+// drei Darts einzeln. Der Einzel-Modus bleibt fuer alle, die genau zaehlen wollen.
+// ---------------------------------------------------------------------------
+
+// Eine komplette Aufnahme buchen. dartsUsed nur beim Ausmachen relevant.
+// Rueckgabe: ok | bust | leg | win | finish | ungueltig | noop
+function applyTurnSum(sum, dartsUsed){
+  var m = state.match; if(!m || m.finished) return "noop";
+  sum = Math.round(sum);
+  if(!(sum>=0 && sum<=180)) return "ungueltig";
+  var p = m.players[m.currentIdx];
+  var ns = p.score - sum;
+
+  // Ausgemacht: fuer die Statistik zaehlt, mit wie vielen Darts.
+  if(ns===0 && !dartsUsed) return "finish";
+
+  snapshot();
+  var d = dartsUsed || 3;
+  p.darts += d; p.legDarts += d;
+  m.currentTurn = [{label:String(sum), value:sum, sum:true}];
+
+  if(ns===0){
+    if(m.doubleIn) p.legStart = false;   // wer ausmacht, war offensichtlich drin
+    p.score = 0;
+    closeTurn(legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
+    if(m.turnStartScore > (p.checkout||0)) p.checkout = m.turnStartScore;
+    sayLastTurn();
+    winLeg(p);
+    save(); render(); return m.finished ? "win" : "leg";
+  }
+  if(ns<0 || (m.doubleOut && ns===1)){
+    bust(); save(); render(); return "bust";
+  }
+  p.score = ns;
+  endTurn();
+  save(); render(); return "ok";
+}
+
+function renderSumPad(m, cur){
+  var val = sumInput==="" ? 0 : parseInt(sumInput,10);
+  var rest = cur.score - val;
+  var warn = "";
+  if(sumInput!==""){
+    if(val>180) warn = 'Mehr als 180 gibt es nicht';
+    else if(rest<0) warn = 'Mehr als der Rest &ndash; das wäre überworfen';
+    else if(m.doubleOut && rest===1) warn = 'Rest 1 ist nicht ausspielbar &ndash; überworfen';
+    else if(rest===0) warn = 'Ausgemacht!';
+  }
+  function key(k, cls, label){
+    return '<button class="btn'+(cls?" "+cls:"")+'" data-act="sumkey" data-k="'+k+'">'
+      + (label||k) + '</button>';
+  }
+  var pad = "";
+  [7,8,9,4,5,6,1,2,3].forEach(function(n){ pad += key(n); });
+  pad += key("del","ghost","&#9003;") + key(0) + key("ok","primary","&#10003;");
+
+  if(pendingFinish!==null){
+    return '<div class="sumfinish">'
+      + '<div class="sflabel">Mit wie vielen Darts ausgemacht?</div>'
+      + '<div class="row">'
+      +   '<button class="btn primary" data-act="sumfin" data-d="1">1</button>'
+      +   '<button class="btn primary" data-act="sumfin" data-d="2">2</button>'
+      +   '<button class="btn primary" data-act="sumfin" data-d="3">3</button>'
+      + '</div>'
+      + '<button class="btn ghost sm" data-act="sumcancel" style="width:auto;margin:10px auto 0">Abbrechen</button>'
+      + '</div>';
+  }
+
+  return '<div class="sumbox">'
+    + '<div class="sumval'+(sumInput===""?" empty":"")+'">'+(sumInput===""?"Aufnahme":sumInput)+'</div>'
+    + '<div class="sumrest">'+(warn ? '<span class="w">'+warn+'</span>'
+        : (sumInput==="" ? 'Punkte der ganzen Aufnahme' : 'Rest danach: <b>'+rest+'</b>'))+'</div>'
+    + '</div>'
+    + '<div class="sumpad">'+pad+'</div>';
+}
+
 function renderGame(){
   var m = state.match;
   var cur = m.players[m.currentIdx];
@@ -910,19 +1004,28 @@ function renderGame(){
     + gameHead(m, multi)
     + '<div class="board">'+cards+'</div>'
     + '<div class="turn">'
-    + '<div class="slots">'+slots+'</div>'
-    + '<div class="info">'+coHtml+'<span class="sum">Aufnahme: <b>'+turnSum+'</b></span></div>'
+    + (sumMode() ? '' : '<div class="slots">'+slots+'</div>')
+    + '<div class="info">'+coHtml
+    +   (sumMode() ? '<span class="sum">Rest <b>'+cur.score+'</b></span>'
+                   : '<span class="sum">Aufnahme: <b>'+turnSum+'</b></span>')
+    + '</div>'
     + '</div>'
     + lastTurnLine(m)
-    + '<div class="mult">'+mb(1,"Single")+mb(2,"Double")+mb(3,"Triple")+'</div>'
-    + '<div class="pad">'+nums
-    + '<button class="btn miss" data-act="num" data-n="0">Miss</button>'
-    + '<button class="btn" data-act="num" data-n="25">25</button>'
-    + '<button class="btn bull" data-act="num" data-n="50">Bull</button>'
+    + '<div class="seg modeseg">'
+    +   '<button class="btn'+(sumMode()?"":" on")+'" data-act="imode" data-v="single">Einzeln</button>'
+    +   '<button class="btn'+(sumMode()?" on":"")+'" data-act="imode" data-v="sum">Ganze Aufnahme</button>'
     + '</div>'
+    + (sumMode() ? renderSumPad(m, cur)
+       : '<div class="mult">'+mb(1,"Single")+mb(2,"Double")+mb(3,"Triple")+'</div>'
+         + '<div class="pad">'+nums
+         + '<button class="btn miss" data-act="num" data-n="0">Miss</button>'
+         + '<button class="btn" data-act="num" data-n="25">25</button>'
+         + '<button class="btn bull" data-act="num" data-n="50">Bull</button>'
+         + '</div>')
     + '<div class="gctl">'
-    + '<button class="btn" data-act="undo" style="flex:2">&#8630;&nbsp; Wurf zurück</button>'
-    + '<button class="btn ghost sm skipbtn" data-act="skip">Aufnahme<br>beenden &#8594;</button>'
+    + '<button class="btn" data-act="undo" style="flex:2">&#8630;&nbsp; '
+      + (sumMode() ? 'Aufnahme zurück' : 'Wurf zurück') + '</button>'
+    + (sumMode() ? '' : '<button class="btn ghost sm skipbtn" data-act="skip">Aufnahme<br>beenden &#8594;</button>')
     + '</div>'
     + '<div class="voice">'
     + '<div class="vhead">'
@@ -1975,6 +2078,30 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
 
   // Spiel
+  if(act==="imode"){
+    state.settings.inputMode = t.getAttribute("data-v")==="sum" ? "sum" : "single";
+    sumInput=""; pendingFinish=null; save(); render(); return;
+  }
+  if(act==="sumkey"){
+    var k=t.getAttribute("data-k");
+    if(k==="del"){ sumInput=sumInput.slice(0,-1); render(); return; }
+    if(k==="ok"){
+      if(sumInput==="") return;
+      var v=parseInt(sumInput,10);
+      var r=applyTurnSum(v);
+      if(r==="finish"){ pendingFinish=v; render(); return; }
+      if(r==="ungueltig"){ sumInput=""; render(); return; }
+      sumInput=""; render(); return;
+    }
+    if(sumInput.length<3) sumInput += k;
+    if(parseInt(sumInput,10)>180) sumInput = k;      // 4 -> 45 -> 456 waere Unsinn
+    render(); return;
+  }
+  if(act==="sumfin"){
+    var dd=parseInt(t.getAttribute("data-d"),10);
+    applyTurnSum(pendingFinish, dd); pendingFinish=null; sumInput=""; render(); return;
+  }
+  if(act==="sumcancel"){ pendingFinish=null; render(); return; }
   if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
   if(act==="num"){ applyDart(curMult, parseInt(t.getAttribute("data-n"),10)); return; }
   if(act==="undo"){ undo(); return; }
@@ -2010,6 +2137,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   finishMatch:finishMatch, undo:undo, endTurn:endTurn, legsNeeded:legsNeeded,
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
   meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
+  applyTurnSum:applyTurnSum, sumMode:sumMode,
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
   startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,
   finishTraining:finishTraining, bestPractice:bestPractice, bestSolo:bestSolo,

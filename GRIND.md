@@ -16,13 +16,13 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - [x] 8 **Logik-Tests** — node-Testrunner gegen `window.DARTS`, ohne npm-Abhängigkeit.
 
 ## Live-bereit — wartet auf dein GO
-- **Darts 1.2 → 1.10** — Match-Historie, Duell-Bilanz (Lion↔Arne↔Justus), Legs/Best-of,
+- **Darts 1.2 → 1.11** — Match-Historie, Duell-Bilanz (Lion↔Arne↔Justus), Legs/Best-of,
   Einstellungen mit Export/Import, Allein-Üben mit Doppel-Training, Spieler-Akte, PWA,
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **106/106 Logik-Tests**, 46 Mutationen in Rot-Proben (alle gefangen nach
-  Reparatur von 7 blinden Tests), Screenshots auf 390×844, SW+Offline und Tap-Größen im
+  — verifiziert: **117/117 Logik-Tests**, 52 Mutationen in Rot-Proben (alle gefangen nach
+  Reparatur von 8 blinden Tests), Screenshots auf 390×844, SW+Offline und Tap-Größen im
   Browser gemessen.
   — 🔴 **Autodeploy: JA.** `gh api repos/lionschmidt-beep/darts/pages` meldet
   `source.branch: main`, `status: built`, `public: true` → **Push = sofort live**
@@ -33,6 +33,20 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 21:10 — Iteration 9: Ganze Aufnahme eintippen
+- Was: Umschalter **Einzeln | Ganze Aufnahme** im Spiel. Im Summen-Modus großer
+  Ziffernblock, laufende Rest-Vorschau, Warnung vor Überwerfen schon beim Tippen.
+  Beim Ausmachen fragt die App **„mit wie vielen Darts?"** — sonst wäre der Schnitt falsch.
+- Grund (Nutzer-Brille): *„Beim Darts ruft einer ‚einundachtzig' und ich will 81 tippen,
+  fertig. Hier muss ich drei Darts einzeln eingeben. Das ist dreimal so viel Getippe, und
+  der Nächste wirft schon."*
+- Beide Wege führen nachweislich zum selben Ergebnis — dafür gibt es einen eigenen Test,
+  der Einzel- und Summen-Eingabe gegeneinander rechnet (Rest, Darts, erzielte Punkte).
+- Verifiziert: **117/117 Tests** (106 → 117). Rot-Probe 6 Mutationen, alle gefangen
+  (eine erst, nachdem ein Test über den echten Umschalter statt über den State ging).
+  Screenshot: Ziffernblock 230×58 px pro Taste.
+- Version: 1.11
 
 ### 27.08.2026 20:30 — Iteration 8: Bedienung nach der Nutzer-Brille
 - Was: Duell-Chips bleiben seitenrichtig (vorher flog beim Antippen der eigene Name raus

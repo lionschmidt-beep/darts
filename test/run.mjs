@@ -1445,6 +1445,150 @@ t("Ohne Handeintrag steht keine Herkunftszeile im Weg", () => {
   ok(!/von Hand/.test(ctx.app.innerHTML), "keine Zeile, die nichts erklaert");
 });
 
+// ================================================================ Summen-Eingabe
+t("Die ganze Aufnahme auf einmal eintragen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  eq(D.applyTurnSum(81), "ok");
+  eq(D.getMatch().players[0].score, 420);
+  eq(D.getMatch().players[0].darts, 3, "eine Aufnahme sind drei Darts");
+  eq(D.getMatch().players[0].scored, 81);
+  eq(D.getMatch().currentIdx, 1, "danach ist der Naechste dran");
+});
+
+t("Eine zu hohe Summe ist ueberworfen, keine negative Zahl", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  eq(D.applyTurnSum(60), "bust");
+  eq(D.getMatch().players[0].score, 40, "zurueck auf den Stand vor der Aufnahme");
+  eq(D.getMatch().players[0].scored, 0, "nichts gutgeschrieben");
+  eq(D.getMatch().players[0].darts, 3, "die Darts zaehlen fuer den Schnitt");
+});
+
+t("Rest 1 ist auch bei Summen-Eingabe ueberworfen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 41);
+  eq(D.applyTurnSum(40), "bust");
+  eq(D.getMatch().players[0].score, 41);
+});
+
+t("Unmoegliche Summen werden abgewiesen, nicht gebucht", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  eq(D.applyTurnSum(181), "ungueltig");
+  eq(D.applyTurnSum(-5), "ungueltig");
+  eq(D.getMatch().players[0].score, 501, "nichts veraendert");
+  eq(D.getMatch().players[0].darts, 0, "und keine Darts verbraucht");
+});
+
+t("Beim Ausmachen fragt die App nach der Dart-Zahl", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  eq(D.applyTurnSum(40), "finish", "erst fragen, dann buchen");
+  eq(D.getMatch().players[0].score, 40, "noch nichts gebucht");
+  eq(D.applyTurnSum(40, 2), "win", "mit zwei Darts ausgemacht");
+  eq(D.getMatch().players[0].darts, 2, "nur zwei Darts, nicht drei");
+  eq(D.getMatch().players[0].checkout, 40);
+  eq(D.getMatch().winnerId, "lion");
+});
+
+t("Der Schnitt stimmt bei Summen-Eingabe", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyTurnSum(60);                                 // Lion
+  D.applyTurnSum(45);                                 // Arne
+  D.applyTurnSum(60);                                 // Lion
+  const p = D.getMatch().players[0];
+  eq(p.scored, 120); eq(p.darts, 6);
+  eq(Math.round(p.scored / p.darts * 3), 60, "Schnitt je drei Darts");
+});
+
+t("Der Ziffernblock bedient sich wie ein Taschenrechner", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(ctx.has("sumkey", { "data-k": 7 }), "Ziffernblock ist da");
+  ok(!ctx.has("num", { "data-n": 20 }), "das Einzel-Feld ist weg");
+  // Nur die Anzeigebox messen - die Zahl taucht spaeter auch in der
+  // Letzte-Aufnahme-Zeile auf, dort waere sie kein Beweis.
+  const anzeige = () => (ctx.app.innerHTML.match(/<div class="sumval[^"]*">([^<]*)<\/div>/) || [])[1];
+  ctx.click("sumkey", { "data-k": 8 });
+  ctx.click("sumkey", { "data-k": 1 });
+  eq(anzeige(), "81", "81 steht in der Anzeige");
+  ok(/Rest danach/.test(ctx.app.innerHTML), "und der Rest wird vorgerechnet");
+  ctx.click("sumkey", { "data-k": "del" });
+  eq(anzeige(), "8", "Loeschen nimmt eine Ziffer weg");
+  ctx.click("sumkey", { "data-k": 1 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  eq(D.getMatch().players[0].score, 420, "eingetragen");
+  eq(anzeige(), "Aufnahme", "und das Feld ist wieder leer");
+});
+
+t("Die Ausmach-Frage laesst sich abbrechen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 4 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  ok(ctx.has("sumfin", { "data-d": 3 }), "die Dart-Frage steht");
+  ctx.click("sumcancel");
+  ok(!ctx.has("sumfin", { "data-d": 3 }), "und ist wieder weg");
+  eq(D.getMatch().finished, false, "nichts gebucht");
+  eq(D.getMatch().players[0].score, 40);
+});
+
+t("Der Umschalter merkt sich die Wahl", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  ctx.D.setView("game"); ctx.D.render();
+  eq(ctx.D.sumMode(), false, "Einzel-Eingabe ist der Auslieferungszustand");
+  ctx.click("imode", { "data-v": "sum" });
+  eq(ctx.D.sumMode(), true, "umgeschaltet");
+  ok(ctx.has("sumkey", { "data-k": 7 }), "und der Ziffernblock ist da");
+  const nach = reboot(ctx);
+  eq(nach.D.sumMode(), true, "die Wahl ueberlebt den Neustart");
+  nach.D.render();
+  ctx.click("imode", { "data-v": "single" });
+  eq(ctx.D.sumMode(), false, "und laesst sich zurueckschalten");
+  ok(ctx.has("num", { "data-n": 20 }), "Einzel-Feld wieder da");
+});
+
+t("Der Eingabe-Modus ueberlebt den Neustart", () => {
+  const ctx = boot();
+  ctx.D.getState().settings.inputMode = "sum";
+  ctx.D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  const nach = reboot(ctx);
+  eq(nach.D.sumMode(), true, "die Wahl bleibt");
+  nach.D.render();
+  ok(nach.has("sumkey", { "data-k": 5 }));
+});
+
+t("Summen-Eingabe und Einzel-Eingabe fuehren zum selben Ergebnis", () => {
+  const a = boot(), b = boot();
+  a.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(a.D, ["T20", "20", "1"]);                       // 60+20+1 = 81
+  b.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b.D.applyTurnSum(81);
+  const pa = a.D.getMatch().players[0], pb = b.D.getMatch().players[0];
+  eq([pa.score, pa.darts, pa.scored], [pb.score, pb.darts, pb.scored],
+     "Rest, Darts und erzielte Punkte identisch");
+});
+
 // ---------------------------------------------------------------- Ausgabe
 console.log("");
 if (fails.length) {
