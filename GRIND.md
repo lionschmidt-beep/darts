@@ -21,9 +21,10 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **165/165 Logik-Tests**, 99 Mutationen in Rot-Proben (alle gefangen nach
-  Reparatur von 17 blinden Tests), Screenshots auf 390×844, SW+Offline und Tap-Größen im
-  Browser gemessen, alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
+  — verifiziert: **174/174 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
+  den Commit-Messages summiert, alle gefangen; in 6 von 14 Commits musste ein Test geschärft
+  werden), Screenshots auf 390×844, SW+Offline und Tap-Größen im Browser gemessen,
+  alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
   — 🔴 **Autodeploy: JA.** `gh api repos/lionschmidt-beep/darts/pages` meldet
   `source.branch: main`, `status: built`, `public: true` → **Push = sofort live**
   auf https://lionschmidt-beep.github.io/darts/
@@ -33,6 +34,28 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 20:20 — Iteration 14+15: Finish-Rechner und Doku
+- 🔴 **Fund aus dem Vault, nicht aus dem Code:** Der `Darts VERSION-Changelog.md` im
+  LionVault trug einen belegten, offenen Befund vom 27.08., den ich nicht kannte — der
+  Checkout-Rechner schlug systematisch das **schlechteste Doppel** vor. Gegen die Platte
+  geprüft: war noch drin. **Das ist der Wert des Vault-Changelogs** — er hat einen echten
+  Bug über eine Session-Grenze getragen.
+- Was: `checkout()` bewertet jetzt alle gleich langen Wege, statt den ersten Treffer zu
+  nehmen. `DOPPEL_VORLIEBE` (D20/D16/D8/D4 zuerst) + `stellKosten()` (auf die 20 zielt man
+  am liebsten, Triple schmal, Doppelring nie als Stellwurf). Drei-Dart-Wege stehen
+  absteigend, so wie man sie ansagt.
+- Gemessen: Finishes auf kleinem/ungeradem Doppel **93 → 11** (die 11 sind erzwungen),
+  Doppelring als Stellwurf **2 → 0**. `60` gibt jetzt `20 D20` statt `T18 D3`,
+  `5` gibt `1 D2` statt `T1 D1`.
+- 🔴 **Drei meiner Tests waren zuerst zu streng** — sie meckerten über `1 D2` und `3 D4`,
+  die aber die Standardwege sind. Gegengerechnet: bei Rest 5/7/9/11 gibt es **keinen** Weg
+  ohne kleine Stellzahl. Tests gegen die Tabelle korrigiert, nicht gegen mein Bauchgefühl.
+- Doku: README auf 1.17, Vault-Changelog von „AKTUELL 1.2" auf den echten Stand
+  (14 Commits ungepusht) — und die dort geschätzte Mutationszahl durch die aus den
+  Commit-Messages summierte ersetzt (**mindestens 91**).
+- Verifiziert: **174/174 Tests** (165 → 174), 4 Mutationen alle gefangen.
+- Version: 1.17
 
 ### 27.08.2026 22:40 — Iteration 10-13: Verifikationslauf abgearbeitet
 Ein Workflow aus 10 Prüfagenten hat **89 Punkte** gegen den Stand 1.11 gemessen, **68 belegt**,
