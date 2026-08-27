@@ -10,6 +10,10 @@ Handy-Web-App zum Darts-Spielen für Lions Team. Eine Datei, kein Login, kein Se
 Doppel-Out oder beliebiger Ausgang, optional Doppel-In. Legs als einzelnes Leg oder
 Best of 3/5/7 mit wechselndem Anwurf.
 
+**Zu dritt wird um Platz 2 weitergespielt** — wer ausgemacht hat, ist durch und wirft nicht
+mehr mit, die anderen spielen den Rest aus. Sonst sitzt der Abgehängte nur da. Die
+Platzierung landet im Verlauf, gezählt als Sieg wird nur Platz 1.
+
 **Eingeben, wie es gerade passt** — entweder Dart für Dart oder die **ganze Aufnahme am
 Stück** („einer ruft einundachtzig, du tippst 81"). Beim Ausmachen fragt die App nach der
 Dart-Zahl, sonst wäre der Schnitt falsch. Unter den Wurf-Feldern steht immer, was zuletzt
@@ -41,14 +45,21 @@ iOS/Safari best-effort. Der Lautsprecher sagt auch beim Tippen jede Aufnahme an.
 
 **Einstellungen** — Standardmodus, Ausgang, Legs, Doppel-In, Ansage, Verlauf, Sicherung.
 
+Während gespielt wird, bleibt der Bildschirm an (`wakeLock`) — zwischen zwei Aufnahmen
+vergehen leicht zwei Minuten, in denen niemand das Handy anfasst.
+
 ## Speicher
 
 Alles liegt im `localStorage` dieses Browsers — kein Server, kein Sync, keine Konten.
 **Cache leeren oder Handy wechseln heißt: weg.** Darum gibt es unter Einstellungen →
 Sicherung einen Export als Datei oder in die Zwischenablage und einen Import zurück.
 
-Die App sagt es, wenn etwas nicht stimmt: kann das Gerät nicht speichern (Safari im
-Privatmodus), liegt oben ein rotes Band. Ist der gespeicherte Stand beschädigt, wird der
+🔴 **In Safari löscht iOS gespeicherte Daten nach sieben Tagen ohne Besuch** — außer die
+Seite liegt über „Zum Home-Bildschirm" als App auf dem Gerät. Genau der Fall „einmal die
+Woche spielen". Die App weist in Safari darauf hin.
+
+Die App sagt es auch sonst, wenn etwas nicht stimmt: kann das Gerät nicht speichern (Safari
+im Privatmodus), liegt oben ein rotes Band. Ist der gespeicherte Stand beschädigt, wird der
 Rohtext unter `darts_v2_defekt` beiseitegelegt, bevor irgendetwas ihn überschreibt. Ist
 die App in zwei Fenstern offen, warnt sie, statt den Verlauf des anderen zu löschen.
 „Verlauf löschen" friert die erreichten Wins vorher als Zahl ein.
@@ -60,7 +71,7 @@ Single-File-App: `index.html`. Kein Build, kein npm. Dazu `manifest.webmanifest`
 eine alte Fassung auf dem Handy festzunageln).
 
 ```
-node test/run.mjs      # 174 Logik-Tests, ohne Abhängigkeiten
+node test/run.mjs      # 194 Logik-Tests, ohne Abhängigkeiten
 ```
 
 Der Testrunner zieht den `<script>`-Block aus `index.html` und führt ihn gegen einen
