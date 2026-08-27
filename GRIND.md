@@ -21,7 +21,7 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **182/182 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
+  — verifiziert: **194/194 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
   den Commit-Messages summiert, alle gefangen; in 6 von 14 Commits musste ein Test geschärft
   werden), Screenshots auf 390×844, SW+Offline und Tap-Größen im Browser gemessen,
   alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
@@ -31,9 +31,49 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   — Kommando: `git -C C:\dev\darts push origin main`
 
 ## Für Lion (Entscheidungen / Blocker)
-- (noch nichts)
+- 🔴 **27.08. — Das Repo ist öffentlich und heißt drei Leute beim Vornamen.** Die Recherche
+  hält § 18 Abs. 1 MStV für wahrscheinlich einschlägig (der kennt nur „ausschließlich
+  persönlich oder familiär") — ein Impressum würde aber **deine Wohnanschrift dauerhaft
+  veröffentlichen**. Empfehlung des Forschers und meine: **Repo privat stellen** statt
+  Impressum. Das löst die Namen in der Git-History gleich mit.
+  ⚠️ Zu prüfen: GitHub Pages aus einem privaten Repo braucht **GitHub Pro**. Alternativen:
+  Repo privat + Pages abschalten (App nur noch lokal/als Datei), oder öffentlich lassen und
+  die Vornamen durch Kürzel ersetzen. **Deine Entscheidung, ich habe nichts geändert.**
+- 💡 **Elimination und Killer** (Kneipenspiele für ungerade Spielerzahl) wären laut Recherche
+  die naheliegendsten neuen Modi — Elimination ist „50 Zeilen Arbeit". Nicht gebaut, weil
+  neue Spielmodi über deinen Auftrag hinausgehen. Sag Bescheid, wenn du willst.
+- 💡 **Handicap**: Das übliche Vorsprung-Handicap ist laut MIT-Sloan-Paper *beweisbar unfair*
+  (der Stärkere gewinnt trotz Ausgleich noch 70 %), weil ein Vorsprung das Scoring verkürzt,
+  nicht das Finish. Fair wäre „Credit-Darts". Wäre ein eigenes Feature.
 
 ## Iterationen
+
+### 27.08.2026 21:40 — Iteration 17: Deep-Research-Gate ausgewertet
+- 🔴 **Der Forscher hat zwei eigene Erwartungen widerlegt** und eine Lücke benannt
+  (r/Darts war über alle Wege 403 — „was wird wirklich gespielt" ist damit schlechter belegt
+  als möglich). Kein Feature-Wunschzettel, sondern belegte Befunde.
+- **Gebaut:** Nach dem Sieger wird um **Platz 2** weitergespielt (belegtes Zitat: *„Platz zwei
+  und drei können so nicht ausgespielt werden. Dies ist insbesondere dann demotivierend, wenn
+  ein Spieler dominant ist."* — trifft Lion/Arne/Justus exakt). Wer durch ist, wirft nicht
+  mehr mit; die Platzierung landet in der Historie, aber nur Platz 1 zählt als Sieg.
+  Dazu **wakeLock** (Bildschirm bleibt im Spiel an) und der **Safari-7-Tage-Hinweis**
+  (localStorage wird ohne Home-Bildschirm-Installation nach einer Woche gelöscht — genau der
+  Fall „einmal die Woche spielen").
+- 🔴 **Ehrliche Nullmeldung:** Der Forscher hat belegt, dass **D16 vor D20** gehört
+  (32→16→8→4→2 hält fünf Halbierungsstufen, 40→20→10→5 nur drei und strandet ungerade).
+  Die Reihenfolge steht jetzt richtig — **gemessen ändert sie an den Vorschlägen aber
+  nichts: 0 von 169 Resten**, weil die Stellwurf-Kosten dominieren. Korrigiert, ohne eine
+  Verbesserung zu behaupten.
+- **Nicht gebaut, bewusst:** Sprachsteuerung nicht ausbauen (drei redende Leute sind das
+  schlechteste Umfeld dafür; die Bewertungen vergleichbarer Apps sind schlecht) ·
+  Elimination/Killer/Handicap → unter „Für Lion", weil neue Spielmodi über den Auftrag
+  hinausgehen · Zielpunkt-Empfehlung aus σ (Tibshirani 2011: bei σ = 16,4 mm springt das
+  optimale Ziel von T20 auf T19) — interessant, aber Nische.
+- 🔴 **Rechtlicher Punkt unter „Für Lion":** öffentliches Repo + Vornamen + § 18 MStV.
+- Verifiziert: **194/194 Tests** (182 → 194), 9 Mutationen alle gefangen. Platz-Screen im
+  Browser geprüft, keine Seitenfehler. Recherche-Notiz:
+  `LionVault/Research/Darts/Darts-App Luecken 2026-08-27.md`
+- Version: 1.19
 
 ### 27.08.2026 21:05 — Iteration 16: Zweite Nutzer-Prüfung abgearbeitet
 - Ergebnis der Gegenprüfung: **11 von 12 alten Punkten sitzen**, einer war halb (Tap-Größen
