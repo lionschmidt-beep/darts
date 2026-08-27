@@ -21,7 +21,7 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **194/194 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
+  — verifiziert: **196/196 Logik-Tests**, mindestens 91 Mutationen in Rot-Proben (Zahl aus
   den Commit-Messages summiert, alle gefangen; in 6 von 14 Commits musste ein Test geschärft
   werden), Screenshots auf 390×844, SW+Offline und Tap-Größen im Browser gemessen,
   alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
@@ -47,6 +47,26 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   nicht das Finish. Fair wäre „Credit-Darts". Wäre ein eigenes Feature.
 
 ## Iterationen
+
+### 27.08.2026 21:35 — Iteration 18: Doku + Randzustände im Browser
+- 🔴 **WIP-Gate meldet 7 offene Repos → Freeze**, keine neuen Features. Diese Iteration ist
+  reine Leiter-Arbeit (Doku nachziehen + Verifikation härten), erzeugt also keine Reviewschuld.
+- **Doku:** README und Vault-Changelog auf 1.19/1.20 nachgezogen, Testzahl gemessen statt
+  abgeschrieben. Die Entscheidungsvorlage zum öffentlichen Repo (§ 18 MStV) steht jetzt als
+  eigener Block im Vault-Changelog, nicht nur im GRIND-Log.
+- **Verifikation gehärtet:** acht Konstellationen × sieben Ansichten im echten Browser
+  durchgeschaltet — 320 px, Querformat 844×390, helles System, acht Spieler, lange Namen.
+  Sieben waren sauber, **eine nicht**: bei „Maximilian-Alexander" war der Inhalt **417 px
+  breit bei 390 px Viewport**. Klassische Flexbox-Falle — ohne `min-width:0` schrumpft ein
+  Flex-Kind nicht unter seine Inhaltsbreite, und `text-overflow:ellipsis` greift dann nie.
+- 🔴 **Der Screenshot zeigte den zweiten Teil des Fehlers:** nach dem Fix passten die Namen,
+  wurden aber **hart abgeschnitten** statt gekürzt — der Legs-Badge lag absolut über dem
+  Namensende. Der Legs-Stand steht jetzt in der Zahlenzeile („⌀ 60.0 · 3 D · 1 L").
+  **Die Messung allein hätte das nicht gefunden, erst das Hinsehen.**
+- Verifiziert: **196/196 Tests** (194 → 196), zwei neue Layout-Tests halten die CSS-Regeln
+  fest (der Testrunner kann kein Layout messen), beide Mutationen gefangen. Nachgemessen:
+  kein Überlauf mehr in 56 Kombinationen.
+- Version: 1.20
 
 ### 27.08.2026 21:40 — Iteration 17: Deep-Research-Gate ausgewertet
 - 🔴 **Der Forscher hat zwei eigene Erwartungen widerlegt** und eine Lücke benannt
