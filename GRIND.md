@@ -16,12 +16,14 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - [x] 8 **Logik-Tests** — node-Testrunner gegen `window.DARTS`, ohne npm-Abhängigkeit.
 
 ## Live-bereit — wartet auf dein GO
-- **Darts 1.2 → 1.9** — Match-Historie, Duell-Bilanz (Lion↔Arne↔Justus), Legs/Best-of,
+- **Darts 1.2 → 1.10** — Match-Historie, Duell-Bilanz (Lion↔Arne↔Justus), Legs/Best-of,
   Einstellungen mit Export/Import, Allein-Üben mit Doppel-Training, Spieler-Akte, PWA,
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
-  unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden).
-  — verifiziert: **96/96 Logik-Tests**, 36 Mutationen in Rot-Proben (alle gefangen nach
-  Reparatur von 5 blinden Tests), Screenshots auf 390×844, SW+Offline im Browser gemessen.
+  unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
+  Nacharbeit aus der Nutzer-Brille.
+  — verifiziert: **106/106 Logik-Tests**, 46 Mutationen in Rot-Proben (alle gefangen nach
+  Reparatur von 7 blinden Tests), Screenshots auf 390×844, SW+Offline und Tap-Größen im
+  Browser gemessen.
   — 🔴 **Autodeploy: JA.** `gh api repos/lionschmidt-beep/darts/pages` meldet
   `source.branch: main`, `status: built`, `public: true` → **Push = sofort live**
   auf https://lionschmidt-beep.github.io/darts/
@@ -31,6 +33,30 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 20:30 — Iteration 8: Bedienung nach der Nutzer-Brille
+- Was: Duell-Chips bleiben seitenrichtig (vorher flog beim Antippen der eigene Name raus
+  und die Bilanz stand gespiegelt) · Abwählen funktioniert überhaupt erst (die Vorbelegung
+  sprang sofort zurück) · „Wurf zurück" und „Aufnahme beenden" sind keine Zwillinge mehr
+  (der Testnutzer traf den falschen und verlor eine Aufnahme) · Zahnrad **30×27 → 45×44**,
+  Kopf-Links 28×17 → 44×44 · Mitspieler direkt im Setup dazunehmen (und er spielt sofort mit)
+  · Duell-Zahlen tragen die Farbe ihres Namens statt einer Legende · Spieler-Akte sagt,
+  woher die Wins kommen („2 gespielt gewonnen · 1 von Hand") · „⌀ 3 Darts" → „Schnitt je
+  3 Darts" · Legs-Zeile nur, wenn sie etwas anderes sagt als die Siege · „Daneben" so groß
+  wie „Treffer" · „501 allein" erklärt sich selbst.
+- 🔴 **Der Lautsprecher-Schalter war für Tipper ein totes Feature** — die App sprach
+  ausschließlich im Sprachmodus. Jetzt sagt sie jede Aufnahme an („Lion 60, Rest 441") und
+  jeden Bust; der Sprachmodus sagt nicht doppelt.
+- 🔴 **Zwei Werkzeug-Fallen unterwegs gefunden:**
+  (a) `` in einem Python-Patch-String wird zu **Backspace 0x08** — zwei Test-Regexe
+      suchten wörtlich nach Steuerzeichen und waren dadurch immer wahr. Gegenprobe über
+      alle Dateien: `index.html` war sauber, nur `test/run.mjs` betroffen.
+  (b) Der Test-Stub lieferte `getElementById` für Elemente, die gar nicht im HTML standen →
+      ein Test fand ein Eingabefeld, das die Ansicht nicht anzeigte. Stub misst jetzt gegen
+      das gerenderte HTML.
+- Verifiziert: **106/106 Tests** (96 → 106). Rot-Probe 10 Mutationen, alle gefangen
+  (zwei erst nach Schärfen). Tap-Größen im Browser gemessen, nicht geschätzt.
+- Version: 1.10
 
 ### 27.08.2026 19:50 — Iteration 7: Prüfer-Befunde abgearbeitet
 Zwei Prüfer liefen blind (kritiker aufs Diff, skeptical-customer auf die Bedienung).

@@ -23,6 +23,7 @@ function makeEl() {
 
 function boot(seedStorage = {}) {
   const store = new Map(Object.entries(seedStorage));
+  const gesagt = [];
   const app = makeEl();
   const els = { app, newName: makeEl(), voiceStatus: makeEl(), impFile: makeEl() };
   const answers = { confirm: true, prompt: null };
@@ -33,11 +34,22 @@ function boot(seedStorage = {}) {
       removeItem: k => store.delete(k),
     },
     document: {
-      getElementById: id => els[id] || null,
+      // Nur liefern, was auch wirklich auf dem Bildschirm steht. Sonst findet
+      // ein Test ein Eingabefeld, das die Ansicht gar nicht anzeigt.
+      getElementById: id => {
+        if (id === "app") return app;
+        return app.innerHTML.includes('id="' + id + '"') ? (els[id] || null) : null;
+      },
       addEventListener: () => {},
+      createElement: () => makeEl(),
+      body: { appendChild: () => {} },
     },
     scrollTo: () => {},
     addEventListener: () => {},
+    // Sprachausgabe mitschreiben statt sie zu verschlucken - sonst laesst sich
+    // nicht pruefen, ob der Lautsprecher-Schalter ueberhaupt etwas bewirkt.
+    speechSynthesis: { cancel() {}, speak(u) { gesagt.push(u.text); } },
+    SpeechSynthesisUtterance: function (t) { this.text = t; },
     navigator: { userAgent: "test" },              // ohne serviceWorker: SW-Zweig bleibt aus
     location: { protocol: "http:", href: "http://localhost/" },
     confirm: () => answers.confirm,
@@ -83,7 +95,7 @@ function boot(seedStorage = {}) {
     const t = findTag(app.innerHTML, act, filter);
     return t ? (t.class || "") : null;
   }
-  return { win, D: win.DARTS, app, store, click, has, classOf, findTag, els, answers };
+  return { win, D: win.DARTS, app, store, click, has, classOf, findTag, els, answers, gesagt };
 }
 // Neustart aus dem gespeicherten Zustand - simuliert Reload / App-Kill auf dem Handy.
 function reboot(ctx) { return boot(Object.fromEntries(ctx.store)); }
@@ -112,6 +124,21 @@ function throwDart(D, s) {
   return D.applyDart(mult, num);
 }
 const seq = (D, arr) => arr.map(x => throwDart(D, x));
+
+// Die CSS-Klassen eines Elements als Liste - robuster als ein Regex mit
+// Wortgrenzen, und es rutschen keine Steuerzeichen hinein.
+function klassen(ctx, act, id) {
+  return String(ctx.classOf(act, { "data-id": id }) || "").split(/\s+/).filter(Boolean);
+}
+
+// Die zwei Namen aus der Duell-Kopfzeile, in der Reihenfolge, in der sie stehen.
+function duellNamen(ctx) {
+  const m = ctx.app.innerHTML.match(/<div class="h2hnames">([\s\S]*?)<\/div>\s*<div class="h2hbig">/);
+  if (!m) return null;
+  return (m[1].match(/<span[^>]*>([^<]+)<\/span>/g) || [])
+    .map(x => x.replace(/<[^>]+>/g, "").trim())
+    .filter(x => x && x !== "vs");
+}
 
 // ================================================================ Regeln
 t("dartValue: T20=60, Doppel-Flag stimmt", () => {
@@ -800,7 +827,7 @@ t("Solo-Screen und Trainings-Screen rendern", () => {
   D.setView("solo"); D.render();
   ok(app.innerHTML.includes("Wer übt?"), "Auswahl da");
   ok(app.innerHTML.includes("Doppel-Training"), "Modus-Karte");
-  ok(app.innerHTML.includes("Noch kein Rekord"), "leerer Zustand beschriftet");
+  ok(/noch kein Rekord/i.test(app.innerHTML), "leerer Zustand beschriftet");
   D.startTraining("double", "lion");
   D.setView("train"); D.render();
   ok(app.innerHTML.includes("Doppel 1"), "aktuelles Ziel gross");
@@ -1277,6 +1304,145 @@ t("checkout kennt seine Grenzen", () => {
   eq(D.checkout(181, 3, false), null);
   eq(D.checkout(170, 3, true), ["T20", "T20", "Bull"], "mit Doppel-Out bleibt 170 die Grenze");
   eq(D.checkout(171, 3, true), null);
+});
+
+// ================================================================ Duell-Auswahl
+t("Beim Umschalten des Gegners bleibe ich links stehen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "justus"], 0);
+  D.setView("h2h"); D.render();
+  const start = ctx.D.getState();
+  eq(D.meId(), "lion");
+
+  // Auf einen NICHT gewaehlten Gegner tippen, wenn schon zwei gewaehlt sind
+  ctx.click("h2hpick", { "data-id": "arne" });
+  eq(duellNamen(ctx), ["Lion", "Arne"], "Lion links, der Gegner rechts");
+  ok(klassen(ctx, "h2hpick", "lion").includes("a"),
+     "Lion traegt die linke Farbe");
+  ok(klassen(ctx, "h2hpick", "arne").includes("b"),
+     "der Gegner die rechte");
+
+  // Und wieder zurueck auf Justus
+  ctx.click("h2hpick", { "data-id": "justus" });
+  eq(duellNamen(ctx), ["Lion", "Justus"], "auch nach dem zweiten Wechsel");
+});
+
+t("Der eigene Chip laesst sich abwaehlen und wieder setzen", () => {
+  const ctx = boot();
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  ctx.D.setView("h2h"); ctx.D.render();
+  ctx.click("h2hpick", { "data-id": "lion" });        // abwaehlen
+  ok(/Noch 1 auswählen|Zwei Spieler antippen/i.test(ctx.app.innerHTML),
+     "die Auswahl springt nicht sofort zurueck");
+  eq(duellNamen(ctx), null, "keine Bilanz ohne zwei Spieler");
+  ctx.click("h2hpick", { "data-id": "lion" });        // wieder dazu
+  eq(duellNamen(ctx), ["Lion", "Arne"], "und steht wieder links");
+});
+
+t("Zurueck und Weiter sind im Spiel nicht mehr verwechselbar", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  ctx.D.setView("game"); ctx.D.render();
+  const undo = ctx.classOf("undo") || "";
+  const skip = ctx.classOf("skip") || "";
+  ok(undo !== skip, "unterschiedliche Optik: undo='" + undo + "' skip='" + skip + "'");
+  ok(/ghost|sm|skipbtn/.test(skip), "der gefaehrlichere Knopf ist der zurueckhaltendere");
+});
+
+// ================================================================ Ansage
+t("Der Lautsprecher-Schalter wirkt auch beim Tippen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  eq(D.getSettings().tts, true, "Ansage ist im Auslieferungszustand an");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });                  // Aufnahme voll -> Ansage
+  ok(ctx.gesagt.length > 0, "es wurde etwas gesagt");
+  const letzte = ctx.gesagt[ctx.gesagt.length - 1];
+  ok(/Lion/.test(letzte), "mit Namen: " + letzte);
+  ok(/60/.test(letzte), "mit der Aufnahme");
+  ok(/441/.test(letzte), "und dem Rest");
+});
+
+t("Ein Bust wird auch angesagt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 20);
+  D.setView("game"); D.render();
+  ctx.click("mult", { "data-m": 3 });
+  ctx.click("num", { "data-n": 20 });                  // Bust
+  const letzte = ctx.gesagt[ctx.gesagt.length - 1] || "";
+  ok(/Überworfen/i.test(letzte), "gesagt wurde: " + letzte);
+});
+
+t("Ausgeschaltet sagt die App nichts", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.tts = false;
+  D.setView("settings"); D.render();
+  ctx.click("s_tts");                                  // aus -> an
+  ctx.click("s_tts");                                  // an -> aus
+  eq(D.getSettings().tts, false);
+  const vorher = ctx.gesagt.length;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });
+  eq(ctx.gesagt.length, vorher, "kein Wort");
+});
+
+t("Der Sprachmodus sagt nicht doppelt an", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("20 20 20", ["lion", "arne"]), "20 20 20");
+  const treffer = ctx.gesagt.filter(x => /Rest/i.test(x));
+  eq(treffer.length, 1, "genau eine Rest-Ansage, nicht zwei: " + JSON.stringify(ctx.gesagt));
+});
+
+// ================================================================ Setup-Bedienung
+t("Ein Gast laesst sich direkt im Setup dazunehmen und spielt mit", () => {
+  const ctx = boot();
+  ctx.D.setView("home"); ctx.D.render();
+  ctx.click("nav", { "data-view": "setup" });
+  ok(ctx.has("add", { "data-guest": 1 }), "das Feld ist im Setup, nicht nur im Team-Screen");
+  ctx.els.newName.value = "Pascal";
+  ctx.click("add", { "data-guest": 1 });
+  const neu = ctx.D.getRoster().find(p => p.name === "Pascal");
+  ok(neu, "im Team");
+  eq(neu.guest, true, "als Gast");
+  ctx.click("start");
+  const namen = ctx.D.getMatch().players.map(p => p.name);
+  ok(namen.includes("Pascal"),
+     "wer im Setup dazukommt, spielt auch mit - sonst muss man ihn noch antippen. War: " +
+     JSON.stringify(namen));
+});
+
+t("Die Spieler-Akte sagt, woher die Wins kommen", () => {
+  const ctx = boot();
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  eq(ctx.D.totalWins("lion"), 3, "1 von Hand + 2 gespielt");
+  ctx.D.setPlayerSel("lion"); ctx.D.setView("player"); ctx.D.render();
+  ok(/2 gespielt gewonnen/.test(ctx.app.innerHTML),
+     "die gespielten Siege stehen da");
+  ok(/1 von Hand/.test(ctx.app.innerHTML),
+     "und der Handeintrag - sonst laesst sich die Zahl nicht nachrechnen");
+});
+
+t("Ohne Handeintrag steht keine Herkunftszeile im Weg", () => {
+  const ctx = boot();
+  ctx.D.setWins("lion", 0);
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  ctx.D.setPlayerSel("lion"); ctx.D.setView("player"); ctx.D.render();
+  ok(!/von Hand/.test(ctx.app.innerHTML), "keine Zeile, die nichts erklaert");
 });
 
 // ---------------------------------------------------------------- Ausgabe
