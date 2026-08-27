@@ -2388,6 +2388,164 @@ t("Der Werkszustand erklaert seine Wins", () => {
      "und die Erklaerung darf nicht mit einer Null anfangen. War: '" + text + "'");
 });
 
+// ================================================================ Finish-Vorschlaege
+// Der Rechner schlug bis 1.16 systematisch das kleinste Doppel vor, weil DOUBLES
+// von D1 aufsteigend gebaut wurde und find() den ersten Treffer nahm. Beim Darts
+// zielt man aber auf D20/D16/D8/D4 - die halbieren sich sauber beim Danebenwerfen.
+const STANDARD = {
+  40: "D20", 32: "D16", 36: "D18", 50: "Bull", 24: "D12", 20: "D10", 16: "D8",
+  60: "20 D20", 81: "T19 D12", 96: "T20 D18",
+  100: "T20 D20", 110: "T20 Bull", 170: "T20 T20 Bull",
+};
+
+t("Die bekannten Finishes stimmen mit der Standardtabelle ueberein", () => {
+  const { D } = boot();
+  const falsch = [];
+  Object.keys(STANDARD).forEach(r => {
+    const c = (D.checkout(+r, 3, true) || []).join(" ");
+    if (c !== STANDARD[r]) falsch.push(r + ": " + c + " statt " + STANDARD[r]);
+  });
+  eq(falsch, [], "Abweichungen von dem, was jeder Spieler wirft");
+});
+
+t("Auch die mehrdeutigen Reste enden auf einem guten Doppel", () => {
+  const { D } = boot();
+  // Fuer 62 und 64 gibt es zwei gaengige Wege (T10 D16 / T18 D4 bzw. T16 D8 /
+  // T8 D20). Beide sind in Ordnung - entscheidend ist, dass hinten ein Doppel
+  // steht, das sich beim Danebenwerfen sauber halbiert.
+  const gut = ["D20", "D16", "D8", "D4", "D12", "D10", "D18", "D14", "D6", "D2", "Bull"];
+  [62, 64, 66, 68, 72, 76, 84, 88, 92].forEach(r => {
+    const c = D.checkout(r, 3, true);
+    ok(c, r + " muss ausspielbar sein");
+    ok(gut.includes(c[c.length - 1]),
+       r + " endet auf " + c[c.length - 1] + " (" + c.join(" ") + ")");
+    eq(c.length, 2, r + " geht in zwei Darts");
+  });
+  // 98 ist der Sonderfall: es gibt schlicht kein gutes Doppel: 98 minus jedes
+  // "gute" Doppel ergibt keine Zahl, die auf dem Board steht. Der Standardweg
+  // ist deshalb T20 D19, und genau den soll die App auch vorschlagen.
+  eq(D.checkout(98, 3, true), ["T20", "D19"], "der klassische 98er-Weg");
+});
+
+t("Kein Finish landet auf einem schlechten Doppel, wenn es anders geht", () => {
+  const { D } = boot();
+  // Diese Doppel sind die schlechtesten des Boards - man nimmt sie nur, wenn es
+  // keinen anderen Weg gibt (Rest 2 -> D1, Rest 6 -> D3 usw.).
+  const schlecht = ["D1", "D3", "D5", "D7", "D9", "D11", "D13"];
+  const unnoetig = [];
+  for (let r = 2; r <= 170; r++) {
+    const c = D.checkout(r, 3, true);
+    if (!c) continue;
+    // Ein-Dart-Finishes haben keine Wahl: 6 ist D3, fertig.
+    if (c.length < 2) continue;
+    const letzte = c[c.length - 1];
+    if (!schlecht.includes(letzte)) continue;
+    // Gibt es ueberhaupt einen Weg auf ein besseres Doppel? Rest muss dafuer
+    // durch ein gutes Doppel teilbar sein, nachdem man 1-2 Darts abgezogen hat.
+    const gut = [40, 32, 16, 8, 24, 20, 36, 12, 28, 4, 50];
+    const gehtBesser = gut.some(d => {
+      if (r === d) return true;
+      const rest = r - d;
+      if (rest <= 0) return false;
+      for (let n = 1; n <= 20; n++) for (const m of [1, 2, 3]) if (n * m === rest) return true;
+      return rest === 25 || rest === 50;
+    });
+    if (gehtBesser) unnoetig.push(r + " -> " + c.join(" "));
+  }
+  eq(unnoetig.slice(0, 12), [], unnoetig.length + " Reste enden unnoetig auf einem schlechten Doppel");
+});
+
+t("Kein Doppel wird als Stellwurf vorgeschlagen", () => {
+  const { D } = boot();
+  const dumm = [];
+  for (let r = 2; r <= 170; r++) {
+    const c = D.checkout(r, 3, true);
+    if (!c || c.length < 2) continue;
+    for (let i = 0; i < c.length - 1; i++)
+      if (/^D\d+$/.test(c[i])) { dumm.push(r + " -> " + c.join(" ")); break; }
+  }
+  eq(dumm, [], "auf einen Doppelring zielt man nicht, nur um zu stellen");
+});
+
+t("Kein T1 oder aehnlicher Unsinn als Stellwurf", () => {
+  const { D } = boot();
+  const dumm = [];
+  for (let r = 2; r <= 170; r++) {
+    const c = D.checkout(r, 3, true);
+    if (!c || c.length < 2) continue;
+    // Ein Stellwurf auf eine sehr kleine Zahl ist vermeidbar, wenn der Rest
+    // gross genug fuer eine anstaendige Zahl ist.
+    // Unter 12 ist man gezwungen: 5 geht nur als "1 D2", "T1 D1" oder "3 D1".
+    if (r >= 12 && /^T?[1-4]$/.test(c[0])) dumm.push(r + " -> " + c.join(" "));
+  }
+  eq(dumm.slice(0, 10), [], dumm.length + " Wege stellen auf eine winzige Zahl");
+});
+
+t("Die Loesbarkeit bleibt unveraendert - dieselben Bogey-Zahlen", () => {
+  const { D } = boot();
+  const ohne = [];
+  for (let r = 2; r <= 170; r++) if (!D.checkout(r, 3, true)) ohne.push(r);
+  eq(ohne, [159, 162, 163, 165, 166, 168, 169],
+     "die sieben klassischen Bogey-Zahlen, nicht mehr und nicht weniger");
+});
+
+t("Jeder Vorschlag geht rechnerisch auf und endet auf einem Doppel", () => {
+  const { D } = boot();
+  const wert = l => {
+    if (l === "Bull") return 50;
+    if (l === "25") return 25;
+    const m = /^([TD])?(\d+)$/.exec(l);
+    return (+m[2]) * (m[1] === "T" ? 3 : m[1] === "D" ? 2 : 1);
+  };
+  const kaputt = [];
+  for (let r = 2; r <= 170; r++) {
+    const c = D.checkout(r, 3, true);
+    if (!c) continue;
+    const summe = c.reduce((a, l) => a + wert(l), 0);
+    const letzte = c[c.length - 1];
+    if (summe !== r) kaputt.push(r + ": " + c.join(" ") + " = " + summe);
+    if (!/^D\d+$/.test(letzte) && letzte !== "Bull")
+      kaputt.push(r + ": endet auf " + letzte + ", das ist kein Doppel");
+    if (c.length > 3) kaputt.push(r + ": " + c.length + " Darts");
+  }
+  eq(kaputt, [], "Vorschlaege, die nicht aufgehen");
+});
+
+t("Ohne Doppel-Out darf jedes Feld ausmachen", () => {
+  const { D } = boot();
+  eq(D.checkout(20, 1, false), ["20"], "ein Single macht aus");
+  eq(D.checkout(180, 3, false), ["T20", "T20", "T20"]);
+  // Nicht jeder Rest ist in drei Darts erreichbar (163, 166, 169 ... gibt es auf
+  // dem Board nicht) - geprueft wird, dass jeder GEFUNDENE Weg aufgeht.
+  const kaputt = [];
+  let loesbar = 0;
+  for (let r = 2; r <= 180; r++) {
+    const c = D.checkout(r, 3, false);
+    if (!c) continue;
+    loesbar++;
+    const wert = l => l === "Bull" ? 50 : l === "25" ? 25 :
+      (+/^([TD])?(\d+)$/.exec(l)[2]) * (l[0] === "T" ? 3 : l[0] === "D" ? 2 : 1);
+    if (c.reduce((a, l) => a + wert(l), 0) !== r) kaputt.push(r + ": " + c.join(" "));
+  }
+  eq(kaputt, [], "jeder gefundene Weg geht auf");
+  ok(loesbar > 160, "und die allermeisten Reste sind spielbar (" + loesbar + " von 179)");
+});
+
+t("Der hoehere Stellwurf steht vorn", () => {
+  const { D } = boot();
+  const falsch = [];
+  const wert = l => l === "Bull" ? 50 : l === "25" ? 25 :
+    (+/^([TD])?(\d+)$/.exec(l)[2]) * (l[0] === "T" ? 3 : l[0] === "D" ? 2 : 1);
+  for (let r = 2; r <= 170; r++) {
+    const c = D.checkout(r, 3, true);
+    if (!c || c.length !== 3) continue;
+    if (wert(c[0]) < wert(c[1])) falsch.push(r + " -> " + c.join(" "));
+  }
+  eq(falsch, [], "so sagt man es nicht an");
+  eq(D.checkout(170, 3, true), ["T20", "T20", "Bull"]);
+  eq(D.checkout(161, 3, true), ["T20", "T17", "Bull"], "der klassische 161er");
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");

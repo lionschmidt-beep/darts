@@ -278,7 +278,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.16";
+var VER    = "1.17";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -462,41 +462,82 @@ function dartValue(mult, num){
   return {value:num*mult, isDouble:mult===2, label:pre+num};
 }
 
-// Alle moeglichen Einzelwuerfe (fuer den Checkout-Rechner), absteigend sortiert.
+// Alle moeglichen Einzelwuerfe fuer den Checkout-Rechner.
 var DOUBLES = [];  for(var n=1;n<=20;n++) DOUBLES.push({value:n*2, label:"D"+n}); DOUBLES.push({value:50,label:"Bull"});
 var ALLTHROWS = [];
 for(var n=1;n<=20;n++) ALLTHROWS.push({value:n*3, label:"T"+n});
 for(var n=1;n<=20;n++) ALLTHROWS.push({value:n*2, label:"D"+n});
 for(var n=1;n<=20;n++) ALLTHROWS.push({value:n,   label:""+n});
 ALLTHROWS.push({value:25,label:"25"}); ALLTHROWS.push({value:50,label:"Bull"});
-ALLTHROWS.sort(function(a,b){return b.value-a.value;}); // "hoch zielen zuerst"
+
+// Auf welchem Doppel macht man am liebsten aus? D20, D16, D8 und D4 halbieren
+// sich sauber, wenn man danebenwirft (40 -> 20 -> 10 -> 5); D1, D3, D5 sind die
+// schlechtesten Felder des Boards. Bis 1.16 wurde DOUBLES von D1 aufsteigend
+// durchsucht und der erste Treffer genommen - der Rechner schlug damit
+// systematisch das schlechteste Doppel vor (93 von 162 Finishes).
+var DOPPEL_VORLIEBE = [40,32,16,8,24,20,36,28,12,4,50,38,34,30,26,22,18,14,10,6,2];
+
+// Wie ungern zielt man auf dieses Feld, nur um zu stellen? Kleiner = lieber.
+function stellKosten(label){
+  if(label==="Bull") return 14;
+  if(label==="25")   return 12;
+  var m = /^([TD])?(\d+)$/.exec(label);
+  if(!m) return 20;
+  var k = 20 - (+m[2]);                 // auf die 20 zielt man am liebsten
+  if(m[1]==="T") k += 3;                // das Triple ist schmal
+  if(m[1]==="D") k += 30;               // auf einen Doppelring stellt man nicht
+  return k;
+}
+function ausKosten(t, doubleOut){
+  if(!doubleOut) return stellKosten(t.label) / 2;   // ohne Doppel-Out: einfachstes Feld
+  var i = DOPPEL_VORLIEBE.indexOf(t.value);
+  return i < 0 ? 30 : i;
+}
 
 // Kuerzestes Finish fuer 'score' mit hoechstens 'dartsLeft' Darts.
-// doubleOut=true -> der letzte Dart muss ein Doppel (oder Bull) sein.
+// Unter den gleich langen Wegen gewinnt der, den ein Mensch auch werfen wuerde.
 function checkout(score, dartsLeft, doubleOut){
   if(dartsLeft<1) return null;
   if(score<=0 || score > (doubleOut?170:180)) return null;
   var finishers = doubleOut ? DOUBLES : ALLTHROWS;
-  var i,j,rem,d;
+  var best = null, i, j, rem;
+  function nimm(weg, kosten){ if(!best || kosten < best.k) best = {w:weg, k:kosten}; }
+
   // 1 Dart
-  for(i=0;i<finishers.length;i++) if(finishers[i].value===score) return [finishers[i].label];
+  for(i=0;i<finishers.length;i++)
+    if(finishers[i].value===score) nimm([finishers[i].label], ausKosten(finishers[i], doubleOut));
+  if(best) return best.w;
   if(dartsLeft<2) return null;
+
   // 2 Darts
   for(i=0;i<ALLTHROWS.length;i++){
     rem = score-ALLTHROWS[i].value; if(rem<=0) continue;
-    d = finishers.find(function(x){return x.value===rem;});
-    if(d) return [ALLTHROWS[i].label, d.label];
+    for(j=0;j<finishers.length;j++){
+      if(finishers[j].value!==rem) continue;
+      nimm([ALLTHROWS[i].label, finishers[j].label],
+           stellKosten(ALLTHROWS[i].label) + ausKosten(finishers[j], doubleOut));
+    }
   }
+  if(best) return best.w;
   if(dartsLeft<3) return null;
+
   // 3 Darts
   for(i=0;i<ALLTHROWS.length;i++){
     for(j=0;j<ALLTHROWS.length;j++){
       rem = score-ALLTHROWS[i].value-ALLTHROWS[j].value; if(rem<=0) continue;
-      d = finishers.find(function(x){return x.value===rem;});
-      if(d) return [ALLTHROWS[i].label, ALLTHROWS[j].label, d.label];
+      for(var k=0;k<finishers.length;k++){
+        if(finishers[k].value!==rem) continue;
+        // Die beiden Stellwuerfe sind austauschbar - der hoehere zuerst,
+        // so wie man es ansagt ("T20, T18, D8" statt "T18, T20, D8").
+        var s1 = ALLTHROWS[i], s2 = ALLTHROWS[j];
+        if(s2.value > s1.value){ var tmp = s1; s1 = s2; s2 = tmp; }
+        nimm([s1.label, s2.label, finishers[k].label],
+             stellKosten(s1.label) + stellKosten(s2.label)
+             + ausKosten(finishers[k], doubleOut));
+      }
     }
   }
-  return null;
+  return best ? best.w : null;
 }
 
 // ---------------------------------------------------------------------------
