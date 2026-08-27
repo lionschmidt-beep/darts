@@ -278,7 +278,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.15";
+var VER    = "1.16";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -333,8 +333,11 @@ function upgradeShape(s){
   s.practice = s.practice.filter(function(r){ return r && r.playerId && r.mode; });
   // Fremde IDs koennten Anfuehrungszeichen enthalten und aus einem data-Attribut
   // ausbrechen. Durch slug() ist das ausgeschlossen.
+  var vergeben = {};
   s.roster.forEach(function(p){
     var clean = slug(String(p.id||p.name||""));
+    while(vergeben[clean]) clean += "x";     // sonst teilen sich zwei Zeilen einen Schluessel
+    vergeben[clean] = true;
     if(clean!==p.id){
       var alt=p.id; p.id=clean;
       (s.history||[]).forEach(function(m2){
@@ -439,6 +442,7 @@ var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, best
 var h2hSel = null;       // [idA, idB] im Direktvergleich
 var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Blick neu bestimmt
 var settingsMsg = "";    // kurze Rueckmeldung im Einstellungs-Screen
+var teamMsg = "";        // kurze Rueckmeldung im Team-Screen
 var soloWho = null;      // wer gerade allein uebt
 var playerSel = null;    // offene Spieler-Akte
 var sumInput = "";       // getippte Aufnahme-Summe
@@ -545,7 +549,7 @@ function legsNeeded(m){ return Math.floor((m.bestOf||1)/2)+1; }
 
 function freshPlayer(id, gt){
   var r = rosterOf(id);
-  return {id:id, name:r?r.name:id, score:gt, darts:0, legsWon:0,
+  return {id:id, name:r?r.name:nameOf(id), score:gt, darts:0, legsWon:0,
           scored:0, best:0, tons:0, oneEighties:0, checkout:0,
           legDarts:0, legStart:true};
 }
@@ -774,13 +778,26 @@ function setWins(id, val){
 // ---------------------------------------------------------------------------
 // Roster-Verwaltung
 // ---------------------------------------------------------------------------
+// Ist dieser Schluessel schon vergeben - im Team ODER in den Aufzeichnungen?
+function idBelegt(id){
+  if(state.roster.some(function(p){return p.id===id;})) return true;
+  for(var i=0;i<state.history.length;i++){
+    var ps = state.history[i].players||[];
+    for(var j=0;j<ps.length;j++) if(ps[j].id===id) return true;
+  }
+  for(var k=0;k<state.practice.length;k++) if(state.practice[k].playerId===id) return true;
+  return false;
+}
+
 function slug(name){
   return name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"") || ("p"+Date.now());
 }
 function addPlayer(name, guest){
   name = (name||"").trim(); if(!name) return null;
   var id = slug(name);
-  while(state.roster.some(function(p){return p.id===id;})) id += "x";
+  // Auch gegen die Historie pruefen: sonst erbt ein namensgleicher Neuling die
+  // Siege eines geloeschten Spielers.
+  while(idBelegt(id)) id += "x";
   state.roster.push({id:id, name:name, winsManual:0, guest:!!guest});
   save();
   return id;
@@ -904,6 +921,7 @@ function renderRoster(){
     + '<button class="btn primary" data-act="add" data-guest="0">Zum Team</button>'
     + '<button class="btn" data-act="add" data-guest="1">Als Gast</button>'
     + '</div>'
+    + (teamMsg ? '<div class="okmsg" style="color:var(--gold)">'+teamMsg+'</div>' : '')
     + '<button class="btn ghost danger sm" data-act="resetwins" style="width:auto;margin:18px auto 0">Rangliste zurücksetzen</button>';
 }
 
@@ -1202,9 +1220,20 @@ function renderWin(){
   }).join("");
   return h()
     + '<div class="win"><div class="trophy">&#127942;</div>'
-    + '<h2>'+esc(w?w.name:"?")+' gewinnt!</h2>'
+    + '<h2>'+esc(w?w.name:"?")+(m.players.length<2?' hat es geschafft!':' gewinnt!')+'</h2>'
     + '<div class="sub">'+m.gameType+(multi?' &middot; Best of '+m.bestOf:'')
       + ' &middot; '+(m.doubleOut?'Doppel-Out':'beliebiger Ausgang')+'</div></div>'
+    + (function(){
+        // Allein gespielt gibt es keinen Gegner - der eigene Rekord ist die Messlatte.
+        if(m.players.length!==1) return '';
+        var alt = bestSolo(m.players[0].id, m.gameType);
+        var jetzt = m.players[0].darts;
+        if(!alt) return '<div class="okmsg" style="text-align:center">Erster Lauf &ndash; das ist ab jetzt dein Rekord: '
+          + jetzt + ' Darts.</div>';
+        if(jetzt < alt.darts) return '<div class="okmsg" style="text-align:center">Neuer Rekord! '
+          + jetzt + ' statt ' + alt.darts + ' Darts.</div>';
+        return '<div class="hint">'+jetzt+' Darts &middot; Rekord steht bei '+alt.darts+'.</div>';
+      })()
     + '<div class="card" style="margin-bottom:14px">'+rows+'</div>'
     + '<div class="stack">'
     + (state.settings.keepHistory!==false
@@ -1809,7 +1838,10 @@ function renderPlayer(){
     + '</div>'
     + (function(){
         var hw = historyWins(p.id), hand = totalWins(p.id) - hw;
-        if(!hw || !hand) return '';
+        if(!hw && !hand) return '';
+        if(!hw) return '<div class="infoline" style="margin:-6px 3px 12px">'+hand
+          + ' von Hand eingetragen &middot; noch kein Spiel gezählt</div>';
+        if(!hand) return '';
         return '<div class="infoline" style="margin:-6px 3px 12px">'+hw+' gespielt gewonnen'
           + ' &middot; '+hand+' von Hand eingetragen</div>';
       })()
@@ -2007,7 +2039,14 @@ function startVoice(){
   if(voiceOn) return;
   ensureRecog();
   voiceOn=true; voiceMsg="";
-  try{ recog.start(); }catch(e){}
+  try{ recog.start(); }
+  catch(e){
+    // Ohne das hier behaupten Knopf und Statuszeile weiter "Hoert zu",
+    // waehrend die Erkennung gar nicht laeuft.
+    voiceOn=false;
+    voiceMsg="Mikrofon startet nicht &ndash; nochmal tippen.";
+    render(); return;
+  }
   say("Sprachmodus an. Sag deine Würfe.");               // entsperrt zugleich iOS-Sprachausgabe
 }
 function stopVoice(){
@@ -2039,7 +2078,11 @@ function applySpokenResultInner(p, rawTxt){
     say("Leg ist zu Ende. Sag weiter."); return;
   }
   if(p.cmd && p.throws.length===0){
-    if(p.cmd==="undo"){ undo(); updateVoiceStatus("&#8617;&#65039; letzter Wurf zurück"); say("Zurück"); return; }
+    if(p.cmd==="undo"){
+      if(undo()){ updateVoiceStatus("&#8617;&#65039; letzter Wurf zurück"); say("Zurück"); }
+      else { updateVoiceStatus("Nichts zum Zurücknehmen."); say("Da ist nichts zum Zurücknehmen"); }
+      return;
+    }
     if(p.cmd==="skip"){
       if(view==="leg"){ view="game"; render(); updateVoiceStatus("&#8594; Leg "+m.legNo); say("Leg "+m.legNo); return; }
       snapshot(); endTurn(); save(); render(); updateVoiceStatus("&#8594; nächster Spieler"); say("Nächster"); return;
@@ -2047,7 +2090,8 @@ function applySpokenResultInner(p, rawTxt){
     if(p.cmd==="stop"){ stopVoice(); render(); return; }
   }
   if(p.throws.length===0){
-    updateVoiceStatus('nicht verstanden: „'+esc(rawTxt||"")+'“'); return;
+    updateVoiceStatus('nicht verstanden: „'+esc(rawTxt||"")+'“');
+    say("Nicht verstanden"); return;
   }
   var cur = m.players[m.currentIdx];
   if(p.name && !nameMatches(p.name, cur.name)){          // vor falschem Spieler schuetzen
@@ -2120,7 +2164,14 @@ document.getElementById("app").addEventListener("click", function(ev){
   // Roster
   if(act==="add"){
     var inp=document.getElementById("newName");
-    var neu=addPlayer(inp?inp.value:"", t.getAttribute("data-guest")==="1");
+    var wunsch=(inp?inp.value:"").trim();
+    if(!wunsch){ teamMsg="Bitte erst einen Namen eintippen."; render(); return; }
+    if(state.roster.some(function(p){return p.name.toLowerCase()===wunsch.toLowerCase();})){
+      if(!confirm("„"+wunsch+"“ gibt es schon. Trotzdem ein zweiter Spieler mit dem Namen?")) return;
+      wunsch = wunsch+" (2)";
+    }
+    teamMsg="";
+    var neu=addPlayer(wunsch, t.getAttribute("data-guest")==="1");
     // Wer im Setup dazukommt, spielt auch mit - sonst muss man ihn noch antippen.
     if(neu && view==="setup" && setupSel) setupSel.selected.add(neu);
     render(); return;
@@ -2147,7 +2198,12 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="winset"){
     var wid=t.getAttribute("data-id"); var wp=state.roster.find(function(x){return x.id===wid;});
     var wv=prompt("Wins für "+(wp?wp.name:"")+":", wp?String(totalWins(wid)):"0");
-    if(wv!==null){ var n=parseInt(wv,10); if(!isNaN(n)){ setWins(wid, n); render(); } }
+    if(wv!==null){
+      var n=parseInt(wv,10);
+      if(isNaN(n)) teamMsg="„"+esc(wv)+"“ ist keine Zahl.";
+      else { teamMsg=""; setWins(wid, n); }
+      render();
+    }
     return;
   }
   if(act==="resetwins"){
@@ -2361,6 +2417,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   finishMatch:finishMatch, undo:undo, endTurn:endTurn, legsNeeded:legsNeeded,
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
   meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
+  setSR:function(x){ SR=x; recog=null; }, nameOf:nameOf, idBelegt:idBelegt,
   applyTurnSum:applyTurnSum, sumMode:sumMode,
   reload:function(){ state=load(); view=restoreView(); },
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,

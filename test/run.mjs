@@ -441,7 +441,7 @@ t("Alle Ansichten rendern ohne Absturz", () => {
   D.render(); ok(app.innerHTML.includes("Leg 1"), "Leg-Zeile im Spiel");
   D.setScore(0, 40); throwDart(D, "D20");
   D.render(); ok(app.innerHTML.includes("holt Leg"), "Leg-Zwischenscreen");
-  D.startMatch(["lion"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
   D.setScore(0, 40); throwDart(D, "D20");
   D.render(); ok(app.innerHTML.includes("gewinnt"), "Win-Screen");
 });
@@ -1107,17 +1107,114 @@ t("Doppel-In zeigt keinen Wurf an, den es nicht zaehlt", () => {
      "der Multiplikator faellt auf Single zurueck, sonst wird der naechste Wurf verdreifacht");
 });
 
-t("Nichts sieht klickbar aus, was nicht klickbar ist", () => {
+t("Kein Element sieht klickbar aus, ohne es zu sein", () => {
   const ctx = boot();
-  ctx.D.setView("home"); ctx.D.render();
-  // Alle Pfeil-Elemente im Kartenkopf muessen ein data-act tragen
-  const koepfe = ctx.app.innerHTML.match(/<div class="cardhead">[\s\S]*?<\/div>/g) || [];
-  koepfe.forEach(k => {
-    const pfeile = k.match(/<span[^>]*>[^<]*&rsaquo;[^<]*<\/span>/g) || [];
-    pfeile.forEach(sp => {
-      ok(/data-act=/.test(sp), "toter Pfeil im Kartenkopf: " + sp);
+  const D = ctx.D;
+  // Daten anlegen, damit alle Screens etwas zu zeigen haben
+  playMatch(D, ["lion", "arne"], 0);
+  playMatch(D, ["lion", "justus"], 1);
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 5; i++) D.trainDart(true);
+  D.finishTraining();
+
+  // Jede im Klick-Handler behandelte Aktion einsammeln - was das HTML anbietet,
+  // aber der Handler nicht kennt, ist ein toter Knopf.
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const behandelt = new Set((script.match(/act===\"[a-z_0-9]+\"/g) || [])
+    .map(x => x.slice(7, -1)));
+
+  const screens = ["home", "roster", "setup", "h2h", "solo", "settings", "player"];
+  const tot = [];
+  screens.forEach(v => {
+    if (v === "player") D.setPlayerSel("lion");
+    D.setView(v); D.render();
+    const h = ctx.app.innerHTML;
+    // (a) angebotene Aktionen, die der Handler nicht kennt
+    (h.match(/data-act="([a-z_0-9]+)"/g) || []).forEach(x => {
+      const a = x.slice(10, -1);
+      if (!behandelt.has(a)) tot.push(v + ": data-act=" + a + " kennt der Handler nicht");
+    });
+    // (b) Pfeil-Elemente ohne data-act, die auch keinen Vorfahren mit data-act haben
+    (h.match(/<span(?![^>]*data-act)[^>]*>[^<]*&rsaquo;[^<]*<\/span>/g) || []).forEach(sp => {
+      const vor = h.slice(0, h.indexOf(sp));
+      const offen = vor.lastIndexOf("<div");
+      const kopf = vor.slice(offen, offen + 200);
+      if (!/data-act/.test(kopf)) tot.push(v + ": Pfeil ohne Ziel " + sp.slice(0, 60));
     });
   });
+  eq(tot, [], "tote Klickziele gefunden");
+});
+
+t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 0);
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const behandelt = new Set((script.match(/act===\"[a-z_0-9]+\"/g) || [])
+    .map(x => x.slice(7, -1)));
+  const angeboten = new Set();
+  const sammle = () => (ctx.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+    .forEach(x => angeboten.add(x.slice(10, -1)));
+  ["home", "roster", "setup", "h2h", "solo", "settings"].forEach(v => {
+    D.setView(v); D.render(); sammle();
+  });
+  D.setPlayerSel("lion"); D.setView("player"); D.render(); sammle();
+
+  // Laufendes Spiel: Board, Summen-Pad, Leg-Zwischenstand
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.setView("game"); D.render(); sammle();
+  D.getState().settings.inputMode = "sum"; D.render(); sammle();
+  D.setScore(0, 40);
+  ctx.click("sumkey", { "data-k": 4 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" }); sammle();               // Ausmach-Frage: sumfin
+  ctx.click("sumcancel");
+  D.getState().settings.inputMode = "single";
+  D.setScore(0, 40); throwDart(D, "D20"); D.render(); sammle();    // Leg-Zwischenstand
+
+  // Home mit laufendem Spiel: fortsetzen / verwerfen
+  D.setView("home"); D.render(); sammle();
+
+  // Gewonnenes Spiel: Sieger-Screen (eigenes Bo1, damit es sicher endet)
+  D.finishMatch();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); eq(throwDart(D, "D20"), "win");
+  D.render(); sammle();                                            // winagain/winhome
+  D.setView("home"); D.render(); sammle();                         // "Ergebnis eintragen"
+  D.finishMatch();
+
+  // Doppel-In-Frage im Summen-Modus
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion"], { gameType: 501, doubleIn: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" }); sammle();               // sumopen/sumcancel
+  ctx.click("sumcancel");
+  D.getState().settings.inputMode = "single";
+
+  // Laufendes Training: auf Home und im Screen
+  D.startTraining("double", "lion");
+  D.setView("home"); D.render(); sammle();                         // "Übung fortsetzen"
+  D.setView("train"); D.render(); sammle();
+  for (let i = 0; i < 21; i++) D.trainDart(true);
+  D.render(); sammle();
+
+  // Warnbaender
+  ctx.zustand.schreibenGeht = false; D.startMatch(["lion"], { gameType: 501, bestOf: 1 });
+  D.setView("home"); D.render(); sammle();                         // standok/reloadstate
+  ctx.zustand.schreibenGeht = true;
+  const horcher = (ctx.events.storage || [])[0];
+  if (horcher) { horcher({ key: "darts_v2" }); D.render(); sammle(); }
+
+  // Der Beschaedigt-Hinweis braucht einen kaputten Stand beim Start
+  const kaputt = boot({ darts_v2: '{"v":2,"roster":[{"id":"x' });
+  kaputt.D.setView("home"); kaputt.D.render();
+  (kaputt.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+    .forEach(x => angeboten.add(x.slice(10, -1)));
+
+  const nie = [...behandelt].filter(a => !angeboten.has(a));
+  eq(nie, [], "Handler-Zweige, die kein Bildschirm je anbietet");
 });
 
 // ================================================================ Neustart-Festigkeit
@@ -2154,6 +2251,141 @@ t("Ein Solo-Rekord faellt nicht hinten aus der Historie", () => {
   ok(D.bestSolo("lion", 501), "es gibt noch einen Solo-Rekord");
   eq(D.bestSolo("lion", 501).darts, 9,
      "und es ist derselbe - ein Rekord darf nicht vom Deckel gefressen werden");
+});
+
+// ================================================================ Sprachmodus, ehrlich
+t("Startet das Mikro nicht, behauptet die App nicht 'hoert zu'", () => {
+  const ctx = boot();
+  ctx.win.SpeechRecognition = function () {
+    this.start = () => { throw new Error("not-allowed"); };
+    this.abort = () => {};
+  };
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setView("game"); D.render();
+  // Die App hat SR beim Laden gelesen - deshalb ueber den Testhaken neu setzen
+  if (!D.setSR) return;                              // Haken fehlt: Test uebersprungen
+  D.setSR(ctx.win.SpeechRecognition);
+  ctx.click("voice");
+  ok(!/Hört zu/.test(ctx.app.innerHTML),
+     "wenn start() wirft, darf der Knopf nicht weiter 'Hört zu' anzeigen");
+});
+
+t("'zurueck' bei leerem Stapel meldet keinen Erfolg", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("zurück", []), "zurück");
+  const gesagt = ctx.gesagt.join(" ");
+  ok(!/^Zurück$/.test(gesagt.trim()),
+     "es wurde nichts zurueckgenommen - das darf die Ansage nicht behaupten. War: " + gesagt);
+  ok(/nichts|nicht/i.test(gesagt), "sondern sagen, dass es nichts gab: " + gesagt);
+});
+
+t("'nicht verstanden' wird auch gesagt, nicht nur geschrieben", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("aehm was war das", []), "aehm was war das");
+  ok(ctx.gesagt.length > 0,
+     "im Bike-Modus liegt das Handy weg - Schweigen ist keine Rueckmeldung");
+  ok(/verstanden/i.test(ctx.gesagt.join(" ")), "gesagt wurde: " + JSON.stringify(ctx.gesagt));
+});
+
+// ================================================================ Randfaelle
+t("Ein geloeschter Spieler behaelt seinen Namen, wenn man weiterspielt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().roster.push({ id: "timo-n", name: "Timo Neumann", winsManual: 0, guest: true });
+  playMatch(D, ["lion", "timo-n"], 0);
+  D.getState().roster = D.getState().roster.filter(p => p.id !== "timo-n");
+  // ueber die Historie muss der Name noch da sein
+  eq(D.nameOf("timo-n"), "Timo Neumann");
+  // und ein neues Match darf ihn nicht auf den Schluessel zurueckwerfen
+  D.startMatch(["lion", "timo-n"], { gameType: 501, bestOf: 1 });
+  eq(D.getMatch().players[1].name, "Timo Neumann",
+     "nicht der rohe Schluessel (war: " + D.getMatch().players[1].name + ")");
+});
+
+t("Ein namensgleicher neuer Spieler erbt keine fremden Siege", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 1);
+  playMatch(D, ["lion", "arne"], 1);
+  const vorher = D.totalWins("arne");
+  D.getState().roster = D.getState().roster.filter(p => p.id !== "arne");
+  D.setView("roster"); D.render();
+  ctx.els.newName.value = "Arne";
+  ctx.click("add", { "data-guest": 0 });
+  const neu = D.getRoster().find(p => p.name === "Arne");
+  ok(neu, "angelegt");
+  eq(D.totalWins(neu.id), 0,
+     "der Neue startet bei null, nicht bei " + vorher + " geerbten Siegen");
+});
+
+t("Ein leerer Name legt keinen Geisterspieler an und sagt warum", () => {
+  const ctx = boot();
+  const vorher = ctx.D.getRoster().length;
+  ctx.D.setView("roster"); ctx.D.render();
+  ctx.els.newName.value = "   ";
+  ctx.click("add", { "data-guest": 0 });
+  eq(ctx.D.getRoster().length, vorher, "nichts angelegt");
+  const meldung = (ctx.app.innerHTML.match(/<div class="okmsg"[^>]*>([^<]*)<\/div>/) || [])[1] || "";
+  ok(/Namen/i.test(meldung),
+     "und es steht ein Hinweis da - der Platzhaltertext zaehlt nicht. War: '" + meldung + "'");
+});
+
+t("Zwei Spieler mit gleichem Namen sind unterscheidbar", () => {
+  const ctx = boot();
+  ctx.D.setView("roster"); ctx.D.render();
+  ctx.els.newName.value = "Arne";
+  ctx.answers.confirm = true;
+  ctx.click("add", { "data-guest": 1 });
+  const arnes = ctx.D.getRoster().filter(p => p.name.indexOf("Arne") === 0);
+  ok(arnes.length === 1 || arnes[0].name !== arnes[1].name,
+     "entweder abgelehnt oder unterscheidbar benannt: " +
+     JSON.stringify(arnes.map(p => p.name)));
+});
+
+t("Importierte IDs kollidieren nicht miteinander", () => {
+  const ctx = boot();
+  const roh = JSON.stringify({ state: { roster: [
+    { id: "Jörg K.", name: "Jörg K.", winsManual: 5 },
+    { id: "Jörg-K!", name: "Jörg K2", winsManual: 1 },
+  ], match: null, history: [], practice: [] }});
+  eq(ctx.D.importText(roh), null);
+  const ids = ctx.D.getRoster().map(p => p.id);
+  eq(new Set(ids).size, ids.length, "beide behalten eigene Schluessel: " + JSON.stringify(ids));
+  eq(ctx.D.totalWins(ids[0]), 5);
+  eq(ctx.D.totalWins(ids[1]), 1, "sonst zeigen beide Zeilen denselben Stand");
+});
+
+t("Der Sieg-Screen nennt den Solo-Rekord", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  // erst ein Solo mit 3 Darts als Rekord
+  D.startMatch(["lion"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20"); D.finishMatch();
+  // dann ein schlechteres
+  D.startMatch(["lion"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["20", "20", "20"]);
+  D.setScore(0, 40); throwDart(D, "D20");
+  D.setView("win"); D.render();
+  ok(/Rekord/i.test(ctx.app.innerHTML),
+     "beim Alleinspielen ist der Rekord die einzige Messlatte - das Training zeigt ihn auch");
+});
+
+t("Der Werkszustand erklaert seine Wins", () => {
+  const ctx = boot();
+  ctx.D.setPlayerSel("arne"); ctx.D.setView("player"); ctx.D.render();
+  eq(ctx.D.playerStats("arne").games, 0, "noch nichts gespielt");
+  const zeile = (ctx.app.innerHTML.match(/<div class="infoline"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || "";
+  const text = zeile.replace(/<[^>]+>/g, "").trim();
+  ok(/von Hand/i.test(text), "3 Wins ohne ein Spiel brauchen eine Erklaerung. War: '" + text + "'");
+  ok(!/0 gespielt/.test(text),
+     "und die Erklaerung darf nicht mit einer Null anfangen. War: '" + text + "'");
 });
 
 // ---------------------------------------------------------------- Ausgabe

@@ -21,9 +21,9 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
   dazu 15 Fehler aus zwei blinden Prüfungen (u.a. Datenverlust beim Wegwischen der App,
   unsichtbarer Bust, Setup zeigte andere Regeln als gespielt wurden) und die Bedienungs-
   Nacharbeit aus der Nutzer-Brille.
-  — verifiziert: **117/117 Logik-Tests**, 52 Mutationen in Rot-Proben (alle gefangen nach
-  Reparatur von 8 blinden Tests), Screenshots auf 390×844, SW+Offline und Tap-Größen im
-  Browser gemessen.
+  — verifiziert: **165/165 Logik-Tests**, 99 Mutationen in Rot-Proben (alle gefangen nach
+  Reparatur von 17 blinden Tests), Screenshots auf 390×844, SW+Offline und Tap-Größen im
+  Browser gemessen, alle 8 Ansichten ohne Konsolenfehler durchgeklickt.
   — 🔴 **Autodeploy: JA.** `gh api repos/lionschmidt-beep/darts/pages` meldet
   `source.branch: main`, `status: built`, `public: true` → **Push = sofort live**
   auf https://lionschmidt-beep.github.io/darts/
@@ -33,6 +33,33 @@ Einzelspieler und Duo-Matchups — z.B. tracken wie es zwischen Arne und mir ste
 - (noch nichts)
 
 ## Iterationen
+
+### 27.08.2026 22:40 — Iteration 10-13: Verifikationslauf abgearbeitet
+Ein Workflow aus 10 Prüfagenten hat **89 Punkte** gegen den Stand 1.11 gemessen, **68 belegt**,
+davon **16 bereits behoben**. Die restlichen 52 sind jetzt abgearbeitet — jeder mit einem
+zuerst roten Test. Die Prüfer haben dabei **drei eigene Funde** gemacht, die weder die
+Nutzer-Brille noch der Kritiker sahen (Modus-Wechsel zählt doppelt, Doppel-In im
+Summen-Modus wirkungslos, Sprachmodus verwirft nach nostart den Rest der Aufnahme).
+
+🔴 **Die fünf Fehlerklassen sind wertvoller als die Einzelfehler:**
+1. **Zustand ohne einzige Wahrheitsquelle** — `snapshot()` zählte Felder von Hand auf, das
+   neueste (`lastTurn`) fehlte. → gemeinsame Feldliste `MATCH_SNAP`; erledigt zugleich den
+   Undo-Rückgabewert und den v1-Stapel-Crash.
+2. **Drei Eingabewege, drei Kopien des Regelwerks** — Doppel-In galt im Tipp-Pfad, nicht im
+   Summen-Pfad; die Ansage nur im Sprach-Pfad.
+3. **Jedes leere `catch` ist stiller Datenverlust** — `save`, `load`, `exportClipboard`,
+   `recog.start`, `undo` meldeten Erfolg, den es nicht gab.
+4. **Beschriftung und Wirkung getrennt gepflegt** — „Speichern" speicherte nicht, „Neuer
+   Rekord!" wurde verworfen, „In der Zwischenablage" war nie dort.
+5. **Fremde Daten nur an der Tür geprüft** — und `render()` lief ohne Netz, also war jede
+   weiße Seite endgültig.
+- Verifiziert: **165/165 Tests** (117 → 165). Rot-Probe **47 Mutationen**, alle gefangen;
+  **9 Tests waren zuerst blind** und wurden geschärft. Der Testrunner selbst hatte zwei
+  Löcher: asynchrone Tests galten stillschweigend als bestanden, und `getElementById`
+  lieferte Elemente, die gar nicht auf dem Bildschirm standen.
+- Neu als Dauerprüfung: ein Test sucht **alle Screens systematisch nach toten Klickzielen**
+  ab, ein zweiter prüft, dass jeder Handler-Zweig auch irgendwo angeboten wird.
+- Version: 1.16
 
 ### 27.08.2026 21:10 — Iteration 9: Ganze Aufnahme eintippen
 - Was: Umschalter **Einzeln | Ganze Aufnahme** im Spiel. Im Summen-Modus großer
