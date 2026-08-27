@@ -21,16 +21,22 @@ function makeEl() {
   return el;
 }
 
-function boot(seedStorage = {}) {
+function boot(seedStorage = {}, opt = {}) {
   const store = new Map(Object.entries(seedStorage));
   const gesagt = [];
+  const zustand = { schreibenGeht: !opt.schreibenScheitert };
+  const events = {};
   const app = makeEl();
   const els = { app, newName: makeEl(), voiceStatus: makeEl(), impFile: makeEl() };
   const answers = { confirm: true, prompt: null };
   const win = {
     localStorage: {
       getItem: k => (store.has(k) ? store.get(k) : null),
-      setItem: (k, v) => store.set(k, String(v)),
+      // Safari im Privatmodus wirft hier. Genau dieser Fall muss pruefbar sein.
+      setItem: (k, v) => {
+        if (!zustand.schreibenGeht) throw new Error("QuotaExceededError");
+        store.set(k, String(v));
+      },
       removeItem: k => store.delete(k),
     },
     document: {
@@ -45,7 +51,7 @@ function boot(seedStorage = {}) {
       body: { appendChild: () => {} },
     },
     scrollTo: () => {},
-    addEventListener: () => {},
+    addEventListener: (typ, fn) => { (events[typ] = events[typ] || []).push(fn); },
     // Sprachausgabe mitschreiben statt sie zu verschlucken - sonst laesst sich
     // nicht pruefen, ob der Lautsprecher-Schalter ueberhaupt etwas bewirkt.
     speechSynthesis: { cancel() {}, speak(u) { gesagt.push(u.text); } },
@@ -95,7 +101,8 @@ function boot(seedStorage = {}) {
     const t = findTag(app.innerHTML, act, filter);
     return t ? (t.class || "") : null;
   }
-  return { win, D: win.DARTS, app, store, click, has, classOf, findTag, els, answers, gesagt };
+  return { win, D: win.DARTS, app, store, click, has, classOf, findTag, els, answers,
+           gesagt, zustand, events };
 }
 // Neustart aus dem gespeicherten Zustand - simuliert Reload / App-Kill auf dem Handy.
 function reboot(ctx) { return boot(Object.fromEntries(ctx.store)); }
@@ -1720,6 +1727,207 @@ t("Ein Wechsel des Eingabe-Modus zaehlt nichts doppelt", () => {
   const p = D.getMatch().players[0];
   eq(p.darts, 3, "drei Darts geworfen, nicht fuenf (war: " + p.darts + ")");
   eq(p.score, 441, "60 Punkte abgezogen, nicht 100 (war: " + p.score + ")");
+});
+
+// ================================================================ Ehrliche Beschriftung
+t("Ohne Verlauf heissen die Knoepfe nicht 'Speichern'", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.keepHistory = false;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40); throwDart(D, "D20");
+  D.setView("win"); D.render();
+  ok(!/Speichern/.test(ctx.app.innerHTML),
+     "es wird nichts gespeichert, also darf da auch nicht Speichern stehen");
+  ctx.click("winhome");
+  eq(D.getHistory().length, 0, "und es wird wirklich nichts gespeichert");
+});
+
+t("Ohne Verlauf feiert das Training keinen Rekord", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.keepHistory = false;
+  D.startTraining("double", "lion");
+  for (let i = 0; i < 21; i++) D.trainDart(true);
+  D.setView("train"); D.render();
+  ok(!/Neuer Rekord/.test(ctx.app.innerHTML),
+     "ein Rekord, der nicht gespeichert wird, ist keiner");
+  D.finishTraining();
+  eq(D.getPractice().length, 0);
+});
+
+t("Der Verlaufs-Schalter sagt, dass auch Siege nicht mehr zaehlen", () => {
+  const ctx = boot();
+  ctx.D.setView("settings"); ctx.D.render();
+  ok(/Siege/.test(ctx.app.innerHTML),
+     "der Untertext nennt nur Bilanz und Statistik, verschweigt aber die Wins");
+});
+
+// ================================================================ Speicher-Ausfall
+t("Ein Geraet, das nicht speichern kann, sagt das", () => {
+  const ctx = boot({}, { schreibenScheitert: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  throwDart(D, "T20");
+  D.setView("game"); D.render();
+  eq(ctx.store.size, 0, "nichts geschrieben - das ist der Ausgangspunkt");
+  ok(/speichert nicht|nicht gespeichert|Sicherung/i.test(ctx.app.innerHTML),
+     "auf dem Schirm muss ein Hinweis stehen, sonst ist der Abend am Ende weg");
+});
+
+t("Solange das Speichern geht, stoert kein Warnband", () => {
+  const ctx = boot();
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  throwDart(ctx.D, "T20");
+  ctx.D.setView("game"); ctx.D.render();
+  ok(!/speichert nicht/i.test(ctx.app.innerHTML), "kein Fehlalarm");
+});
+
+// ================================================================ Doppel-In im Summen-Modus
+t("Doppel-In gilt auch bei Summen-Eingabe", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  eq(D.getMatch().players[0].score, 501, "noch nichts gebucht");
+  ok(ctx.has("sumopen", { "data-v": 1 }),
+     "die App fragt, ob ein Doppel dabei war - stumm ignorieren waere falsch");
+
+  // "Nein": die Darts sind geworfen, die Punkte zaehlen nicht
+  ctx.click("sumopen", { "data-v": 0 });
+  const p = D.getMatch().players[0];
+  eq(p.score, 501, "keine Punkte");
+  eq(p.darts, 3, "die Darts zaehlen fuer den Schnitt");
+  eq(p.legStart, true, "immer noch nicht drin");
+});
+
+t("Mit Doppel eroeffnet zaehlt die ganze Aufnahme", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  ctx.click("sumopen", { "data-v": 1 });
+  const p = D.getMatch().players[0];
+  eq(p.score, 441, "60 abgezogen");
+  eq(p.legStart, false, "jetzt ist er drin");
+  eq(p.darts, 3);
+  // und der naechste Wurf braucht keine Frage mehr
+  D.render();
+  ctx.click("sumkey", { "data-k": 4 });
+  ctx.click("sumkey", { "data-k": 5 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  eq(D.getMatch().players[0].score, 396, "ohne erneute Nachfrage");
+});
+
+t("Die Doppel-In-Frage laesst sich abbrechen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion"], { gameType: 501, doubleIn: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ctx.click("sumkey", { "data-k": 6 });
+  ctx.click("sumkey", { "data-k": 0 });
+  ctx.click("sumkey", { "data-k": "ok" });
+  ctx.click("sumcancel");
+  ok(!ctx.has("sumopen", { "data-v": 1 }), "Frage weg");
+  eq(D.getMatch().players[0].darts, 0, "nichts gebucht");
+});
+
+t("Der Doppel-In-Hinweis verschwindet, sobald man drin ist", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.inputMode = "sum";
+  D.startMatch(["lion"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(/Doppel-In/.test(ctx.app.innerHTML), "erst steht der Hinweis da");
+  D.applyTurnSum(60, 3, true);                       // mit Doppel eroeffnet
+  D.render();
+  ok(!/erst ein Doppel eröffnet/.test(ctx.app.innerHTML),
+     "danach nicht mehr - sonst behauptet der Schirm dauerhaft das Gegenteil");
+});
+
+// ================================================================ Sprachmodus
+t("Nach einem nicht eroeffnenden Wurf zaehlen die naechsten weiter", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.applySpokenResult(D.parseSpeech("triple 20 doppel 20 triple 20", []), "…");
+  const p = D.getMatch().players[0];
+  eq(p.darts, 3, "alle drei Darts sind geworfen worden (war: " + p.darts + ")");
+  eq(p.score, 401, "D20 eroeffnet, dann zaehlt T20: 501-40-60 (war: " + p.score + ")");
+});
+
+t("Eine alte Sprach-Meldung beschreibt nicht den neuen Stand", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  D.applySpokenResult(D.parseSpeech("triple 20", []), "triple 20");   // Bust per Sprache
+  D.setView("game"); D.render();
+  ok(/überworfen/i.test(ctx.app.innerHTML), "die Meldung steht");
+  // jetzt drei getippte Darts fuer Arne
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });
+  ctx.click("num", { "data-n": 20 });
+  const status = (ctx.app.innerHTML.match(/id="voiceStatus"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || "";
+  ok(!/überworfen/i.test(status),
+     "die Sprach-Statuszeile darf nicht weiter den alten Wurf beschreiben. War: " +
+     status.replace(/<[^>]+>/g, "").trim());
+});
+
+// ================================================================ Zweites Fenster
+t("Ein zweites Fenster loescht den Verlauf nicht lautlos", () => {
+  const ctx = boot();
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  playMatch(ctx.D, ["lion", "arne"], 0);
+  eq(ctx.D.getHistory().length, 2);
+  // Fenster B hatte einen aelteren Stand und schreibt ihn zurueck
+  const alt = JSON.stringify({ v: 2, roster: ctx.D.getRoster(), match: null,
+                               history: [], practice: [], settings: ctx.D.getSettings() });
+  ctx.store.set("darts_v2", alt);
+  const horcher = (ctx.events.storage || [])[0];
+  ok(horcher, "die App hoert ueberhaupt auf fremde Schreibvorgaenge");
+  horcher({ key: "darts_v2" });
+  eq(ctx.D.getHistory().length, 0, "der fremde Stand wird uebernommen (nichts lief hier)");
+});
+
+t("Bei laufendem Spiel warnt die App statt zu ueberschreiben", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  throwDart(D, "T20");
+  const horcher = (ctx.events.storage || [])[0];
+  ok(horcher, "Horcher da");
+  horcher({ key: "darts_v2" });
+  ok(D.getMatch(), "das laufende Spiel bleibt");
+  ok(/zweites offenes Fenster/i.test(ctx.app.innerHTML),
+     "aber es steht eine Warnung auf dem Schirm");
+});
+
+t("Ein fremder Schreibvorgang auf einen anderen Schluessel stoert nicht", () => {
+  const ctx = boot();
+  // Mit laufendem Spiel - nur dann waere eine falsche Warnung ueberhaupt sichtbar.
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  throwDart(ctx.D, "T20");
+  const horcher = (ctx.events.storage || [])[0];
+  horcher({ key: "ein-ganz-anderer-key" });
+  ctx.D.render();
+  ok(!/zweites offenes Fenster/i.test(ctx.app.innerHTML),
+     "ein fremder Schluessel darf keine Warnung ausloesen");
+  horcher({});                                       // Event ohne key
+  ctx.D.render();
+  ok(!/zweites offenes Fenster/i.test(ctx.app.innerHTML), "auch nicht ein Event ohne Schluessel");
+  horcher({ key: "darts_v2" });                      // jetzt der echte
+  ctx.D.render();
+  ok(/zweites offenes Fenster/i.test(ctx.app.innerHTML), "der echte Schluessel dagegen schon");
 });
 
 // ---------------------------------------------------------------- Ausgabe

@@ -66,6 +66,11 @@
   .srow .sl{flex:1; font-size:14px; color:var(--muted); font-weight:600;}
   .srow .sv{font-size:17px; font-weight:800;}
   .srow .sv small{font-size:11.5px; color:var(--muted); font-weight:600;}
+  .alarm{background:#3a2a2d; border:1px solid var(--red); border-radius:12px;
+    padding:11px 13px; margin:calc(env(safe-area-inset-top) + 10px) 0 0;
+    font-size:13px; color:#ffb4b6; line-height:1.45;}
+  .alarm .alarmlink{color:var(--text); font-weight:700; text-decoration:underline; cursor:pointer;
+    display:inline-block; padding:6px 0;}
   .infoline{font-size:12.5px; color:var(--muted); margin:10px 3px 0;}
   .infoline b{color:var(--text); font-weight:700;}
   .pick .nm .sublbl{font-size:11.5px; color:var(--muted); font-weight:500; margin-top:2px;}
@@ -272,7 +277,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.12";
+var VER    = "1.13";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -381,11 +386,20 @@ function load(){
   return defaultState();
 }
 var LIVE_VIEWS = ["game","leg","win","train"];
+var speicherKaputt = false;   // localStorage lehnt ab (Safari-Privatmodus, Quota)
+var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraendert
 function save(){
   try{
     if(typeof view!=="undefined") state._view = LIVE_VIEWS.indexOf(view)>=0 ? view : "home";
     localStorage.setItem(KEY, JSON.stringify(state));
-  }catch(e){}
+    speicherKaputt = false;
+    return true;
+  }catch(e){
+    // Nicht schlucken: sonst spielt man einen Abend durch und alles ist weg,
+    // waehrend auf dem Schirm "Alles bleibt auf diesem Handy gespeichert" steht.
+    speicherKaputt = true;
+    return false;
+  }
 }
 // Welcher Bildschirm gilt nach einem Neustart? Nur einer, zu dem es auch einen
 // Zustand gibt - sonst landet man auf einem Screen ohne Daten.
@@ -408,6 +422,7 @@ var soloWho = null;      // wer gerade allein uebt
 var playerSel = null;    // offene Spieler-Akte
 var sumInput = "";       // getippte Aufnahme-Summe
 var pendingFinish = null; // Summe, die ausmacht - wartet auf die Dart-Zahl
+var pendingOpen = null;   // Summe bei Doppel-In - wartet auf "war ein Doppel dabei?" 
 
 // ---------------------------------------------------------------------------
 // Darts-Regeln: Wurf-Werte, Checkout-Rechner
@@ -925,11 +940,28 @@ function lastTurnLine(m){
 
 // Eine komplette Aufnahme buchen. dartsUsed nur beim Ausmachen relevant.
 // Rueckgabe: ok | bust | leg | win | finish | ungueltig | noop
-function applyTurnSum(sum, dartsUsed){
+// opened: undefined = die App muss fragen, true = mit Doppel eroeffnet,
+// false = ausdruecklich ohne. Ohne diese Unterscheidung war Doppel-In im
+// Summen-Modus schlicht wirkungslos, waehrend der Schirm das Gegenteil behauptete.
+function applyTurnSum(sum, dartsUsed, opened){
   var m = state.match; if(!m || m.finished) return "noop";
   sum = Math.round(sum);
   if(!(sum>=0 && sum<=180)) return "ungueltig";
   var p = m.players[m.currentIdx];
+
+  if(m.doubleIn && p.legStart){
+    if(opened===undefined) return "needopen";
+    if(opened===false){                      // geworfen, aber nicht eroeffnet
+      snapshot();
+      var dn = dartsUsed || 3;
+      p.darts += dn; p.legDarts += dn;
+      m.currentTurn = [{label:String(sum), value:0, sum:true, nostart:true}];
+      endTurn("nostart");
+      save(); render(); return "nostart";
+    }
+    p.legStart = false;
+  }
+
   var ns = p.score - sum;
 
   // Ausgemacht: fuer die Statistik zaehlt, mit wie vielen Darts.
@@ -941,7 +973,6 @@ function applyTurnSum(sum, dartsUsed){
   m.currentTurn = [{label:String(sum), value:sum, sum:true}];
 
   if(ns===0){
-    if(m.doubleIn) p.legStart = false;   // wer ausmacht, war offensichtlich drin
     p.score = 0;
     closeTurn(legsNeeded(m) > p.legsWon+1 ? "leg" : "win");
     if(m.turnStartScore > (p.checkout||0)) p.checkout = m.turnStartScore;
@@ -975,6 +1006,16 @@ function renderSumPad(m, cur){
   [7,8,9,4,5,6,1,2,3].forEach(function(n){ pad += key(n); });
   pad += key("del","ghost","&#9003;") + key(0) + key("ok","primary","&#10003;");
 
+  if(pendingOpen!==null){
+    return '<div class="sumfinish">'
+      + '<div class="sflabel">Doppel-In: war ein Doppel dabei?</div>'
+      + '<div class="row">'
+      +   '<button class="btn primary" data-act="sumopen" data-v="1">Ja &middot; '+pendingOpen+' zählen</button>'
+      +   '<button class="btn" data-act="sumopen" data-v="0">Nein</button>'
+      + '</div>'
+      + '<button class="btn ghost sm" data-act="sumcancel" style="width:auto;margin:10px auto 0">Abbrechen</button>'
+      + '</div>';
+  }
   if(pendingFinish!==null){
     return '<div class="sumfinish">'
       + '<div class="sflabel">Mit wie vielen Darts ausgemacht?</div>'
@@ -1105,8 +1146,12 @@ function renderWin(){
       + ' &middot; '+(m.doubleOut?'Doppel-Out':'beliebiger Ausgang')+'</div></div>'
     + '<div class="card" style="margin-bottom:14px">'+rows+'</div>'
     + '<div class="stack">'
-    + '<button class="btn primary" data-act="winagain">Speichern &middot; nochmal</button>'
-    + '<button class="btn" data-act="winhome">Speichern &middot; zur Rangliste</button>'
+    + (state.settings.keepHistory!==false
+        ? '<button class="btn primary" data-act="winagain">Speichern &middot; nochmal</button>'
+          + '<button class="btn" data-act="winhome">Speichern &middot; zur Rangliste</button>'
+        : '<button class="btn primary" data-act="winagain">Nochmal</button>'
+          + '<button class="btn" data-act="winhome">Zur Rangliste</button>'
+          + '<div class="hint">Verlauf ist aus &ndash; dieses Spiel wird nicht mitgezählt.</div>')
     + '<button class="btn ghost" data-act="undo">&#8630; Doch nicht &ndash; letzten Dart zurück</button>'
     + '</div>';
 }
@@ -1380,7 +1425,7 @@ function renderSettings(){
 
     + '<label class="lbl" style="margin-top:16px">Verlauf</label>'
     + toggle("s_hist", st.keepHistory!==false, "Spiele mitschreiben",
-             "Ohne Verlauf gibt es keine Duell-Bilanz und keine Statistik")
+             "Ohne Verlauf zählen auch Siege und Übungsrekorde nicht mehr")
     + '<div class="infoline"><b>'+nGames+'</b> Spiele &middot; <b>'+nPlayers+'</b> Spieler '
       + '&middot; Version '+VER+'</div>'
 
@@ -1391,8 +1436,13 @@ function renderSettings(){
     +   '<button class="btn" data-act="s_import">&#11014;&#65039;&nbsp; Sicherung einspielen</button>'
     + '</div>'
     + '<input type="file" id="impFile" accept="application/json,.json" style="display:none">'
-    + '<div class="hint" style="text-align:left">Alles liegt nur in diesem Browser. Cache leeren '
-      + 'oder Handy wechseln = weg. Die Sicherung ist die einzige Kopie.</div>'
+    + '<div class="hint" style="text-align:left">'
+      + (speicherKaputt
+         ? '<b style="color:var(--red)">Dieses Gerät speichert gerade nichts.</b> Alles, was du '
+           + 'heute gespielt hast, existiert nur, solange die Seite offen ist &ndash; jetzt sichern.'
+         : 'Alles liegt nur in diesem Browser. Cache leeren oder Handy wechseln = weg. '
+           + 'Die Sicherung ist die einzige Kopie.')
+      + '</div>'
     + (settingsMsg ? '<div class="okmsg">'+settingsMsg+'</div>' : '')
 
     + '<label class="lbl" style="margin-top:18px">Aufräumen</label>'
@@ -1559,16 +1609,22 @@ function renderTrain(){
 
   if(tr.done){
     var quote = tr.darts ? Math.round(tr.hits/tr.darts*100) : 0;
-    var isBest = !best || tr.hits>best.score || (tr.hits===best.score && tr.darts<best.darts);
+    var speichert = state.settings.keepHistory!==false;
+    var isBest = speichert &&
+      (!best || tr.hits>best.score || (tr.hits===best.score && tr.darts<best.darts));
     return h()
       + '<div class="win"><div class="trophy">'+(isBest?'&#127942;':'&#127919;')+'</div>'
       + '<h2>'+tr.hits+' von '+cfg.max+'</h2>'
       + '<div class="sub">'+who+' &middot; '+tr.darts+' Darts &middot; '+quote+' % Trefferquote</div></div>'
       + (isBest ? '<div class="okmsg" style="text-align:center">Neuer Rekord!</div>'
-                : '<div class="hint">Rekord steht bei '+best.score+'.</div>')
+                : '<div class="hint">'
+                  + (speichert ? 'Rekord steht bei '+(best?best.score:0)+'.'
+                               : 'Verlauf ist aus &ndash; dieser Lauf wird nicht gespeichert.')
+                  + '</div>')
       + '<div class="stack" style="margin-top:14px">'
       + '<button class="btn primary" data-act="train_again">Nochmal</button>'
-      + '<button class="btn" data-act="train_end">Speichern &middot; fertig</button>'
+      + '<button class="btn" data-act="train_end">'
+        + (speichert ? 'Speichern &middot; fertig' : 'Fertig') + '</button>'
       + '</div>';
   }
 
@@ -1715,7 +1771,14 @@ function render(){
   else if(view==="train" && state.train) html = renderTrain();
   else if(view==="setup") html = renderSetup();
   else { view="home"; html = renderHome(); }
-  el.innerHTML = html;
+  el.innerHTML = (fremdGeschrieben
+    ? '<div class="alarm">&#9888;&#65039; Ein zweites offenes Fenster hat den Stand verändert. '
+      + 'Was du hier weiterspielst, überschreibt es. '
+      + '<span data-act="reloadstate" class="alarmlink">Fremden Stand laden &rsaquo;</span></div>'
+    : '') + (speicherKaputt
+    ? '<div class="alarm">&#9888;&#65039; Dieses Gerät speichert nichts &ndash; alles ist beim '
+      + 'Schließen weg. <span data-act="nav" data-view="settings" class="alarmlink">Jetzt sichern &rsaquo;</span></div>'
+    : '') + html;
   window.scrollTo(0,0);
   if(view==="game") updateVoiceStatus();
 }
@@ -1903,7 +1966,7 @@ function applySpokenResultInner(p, rawTxt){
     say(cur.name+" ist dran, nicht "+p.name);
     return;
   }
-  var idxBefore=m.currentIdx, applied=[], event="ok";
+  var idxBefore=m.currentIdx, applied=[], event="ok", nichtGezaehlt=[];
   for(var k=0;k<p.throws.length;k++){
     if(!state.match || state.match.finished) break;
     if(state.match.currentIdx!==idxBefore) break;         // Aufnahme lief voll -> Rest verwerfen
@@ -1914,7 +1977,7 @@ function applySpokenResultInner(p, rawTxt){
     if(r==="win"){ event="win"; break; }
     if(r==="leg"){ event="leg"; break; }
     if(r==="bust"){ event="bust"; break; }
-    if(r==="nostart"){ event="nostart"; break; }
+    if(r==="nostart"){ nichtGezaehlt.push(th.label); continue; }
     if(state.match && state.match.currentIdx!==idxBefore){ event="full"; break; }
   }
   var labels = applied.map(function(a){return a.label;}).join(" ");
@@ -1925,8 +1988,9 @@ function applySpokenResultInner(p, rawTxt){
     updateVoiceStatus('&#127919; Leg an <b>'+esc(cur.name)+'</b> ('+(lw?lw.darts:0)+' Darts) &middot; sag „weiter“');
     say("Leg für "+cur.name+". Sag weiter für das nächste Leg."); return;
   }
-  if(event==="nostart"){
-    updateVoiceStatus('&#9888;&#65039; Doppel-In: '+esc(cur.name)+' ist noch nicht drin &ndash; erst ein Doppel zählt.');
+  if(nichtGezaehlt.length && !applied.filter(function(a){return nichtGezaehlt.indexOf(a.label)<0;}).length){
+    updateVoiceStatus('&#9888;&#65039; Doppel-In: '+esc(cur.name)+' ist noch nicht drin &ndash; '
+      + esc(nichtGezaehlt.join(" "))+' zählt nicht.');
     say("Noch kein Doppel."); return;
   }
   if(event==="bust"){
@@ -1945,6 +2009,13 @@ document.getElementById("app").addEventListener("click", function(ev){
   var t = ev.target.closest("[data-act]"); if(!t) return;
   var act = t.getAttribute("data-act");
 
+  if(act==="reloadstate"){
+    if(confirm("Stand des anderen Fensters laden? Was hier offen ist, geht verloren.")){
+      state = load(); h2hSel=null; h2hAuto=true; setupSel=null;
+      fremdGeschrieben=false; view=restoreView(); render();
+    }
+    return;
+  }
   if(act==="nav"){
     view=t.getAttribute("data-view");
     if(view==="setup") setupSel=null;
@@ -2121,7 +2192,7 @@ document.getElementById("app").addEventListener("click", function(ev){
       while(state.match.currentTurn.length && undo()){}
     }
     state.settings.inputMode = t.getAttribute("data-v")==="sum" ? "sum" : "single";
-    sumInput=""; pendingFinish=null; save(); render(); return;
+    sumInput=""; pendingFinish=null; pendingOpen=null; save(); render(); return;
   }
   if(act==="sumkey"){
     var k=t.getAttribute("data-k");
@@ -2130,6 +2201,7 @@ document.getElementById("app").addEventListener("click", function(ev){
       if(sumInput==="") return;
       var v=parseInt(sumInput,10);
       var r=applyTurnSum(v);
+      if(r==="needopen"){ pendingOpen=v; render(); return; }
       if(r==="finish"){ pendingFinish=v; render(); return; }
       if(r==="ungueltig"){ sumInput=""; render(); return; }
       sumInput=""; render(); return;
@@ -2142,7 +2214,15 @@ document.getElementById("app").addEventListener("click", function(ev){
     var dd=parseInt(t.getAttribute("data-d"),10);
     applyTurnSum(pendingFinish, dd); pendingFinish=null; sumInput=""; render(); return;
   }
-  if(act==="sumcancel"){ pendingFinish=null; render(); return; }
+  if(act==="sumopen"){
+    var ja = t.getAttribute("data-v")==="1";
+    var v2 = pendingOpen; pendingOpen=null;
+    var r2 = applyTurnSum(v2, null, ja);
+    if(r2==="finish"){ pendingFinish=v2; }
+    else sumInput="";
+    render(); return;
+  }
+  if(act==="sumcancel"){ pendingFinish=null; pendingOpen=null; render(); return; }
   if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
   if(act==="num"){ applyDart(curMult, parseInt(t.getAttribute("data-n"),10)); return; }
   if(act==="undo"){ undo(); return; }
@@ -2179,6 +2259,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
   meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
   applyTurnSum:applyTurnSum, sumMode:sumMode,
+  reload:function(){ state=load(); view=restoreView(); },
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
   startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,
   finishTraining:finishTraining, bestPractice:bestPractice, bestSolo:bestSolo,
@@ -2193,6 +2274,21 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
     state.match.turnStartScore=state.match.players[state.match.currentIdx].score; } };
 
 render();
+
+// Ein zweites offenes Fenster (PWA neben Safari-Tab) schreibt denselben
+// Schluessel. Ohne dieses Ohr ueberschreibt der eine Stand den anderen lautlos.
+if(typeof window.addEventListener === "function"){
+  window.addEventListener("storage", function(ev){
+    if(!ev || ev.key !== KEY) return;
+    fremdGeschrieben = true;
+    if(!state.match && !state.train){        // nichts offen -> einfach uebernehmen
+      state = load(); h2hSel=null; h2hAuto=true; setupSel=null;
+      fremdGeschrieben = false;
+      view = restoreView();
+    }
+    render();
+  });
+}
 
 // Offline-Faehigkeit. Der Service Worker laeuft "network first" (siehe sw.js) -
 // er macht die App offline nutzbar, ohne eine alte Version festzunageln.
