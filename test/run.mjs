@@ -3081,6 +3081,60 @@ t("Die Historie bleibt nach dem Deckeln zeitlich sortiert", () => {
   ok(sortiert, "sonst steht ein geretteter Rekord mitten in der Zeitreihe");
 });
 
+// ================================================================ Als App aufs Handy
+// iOS liest das Manifest NICHT und kann kein SVG als App-Icon. Ohne PNG landet
+// beim "Zum Home-Bildschirm" ein graues Kaestchen statt des Dartboards.
+t("Das iOS-App-Icon ist ein PNG", () => {
+  const kopf = html.slice(0, html.indexOf("</head>"));
+  const at = kopf.match(/<link[^>]*rel="apple-touch-icon"[^>]*>/);
+  ok(at, "apple-touch-icon gesetzt");
+  ok(/\.png/.test(at[0]), "und zwar als PNG - SVG ignoriert iOS: " + at[0]);
+  ok(/sizes="180x180"/.test(at[0]), "mit der Groesse, die iOS erwartet");
+  ok(fs.existsSync(path.join(root, "apple-touch-icon.png")), "die Datei liegt auch da");
+});
+
+t("iOS bekommt ein Startbild statt einer weissen Seite", () => {
+  const kopf = html.slice(0, html.indexOf("</head>"));
+  const splash = kopf.match(/<link[^>]*rel="apple-touch-startup-image"[^>]*>/g) || [];
+  eq(splash.length, 4,
+     "vier Geraetegroessen: 393x852, 390x844, 428x926, 375x667 (war: " + splash.length + ")");
+  ["393px", "390px", "428px", "375px"].forEach(b => {
+    ok(splash.some(l => l.includes("device-width:" + b)),
+       "Breite " + b + " fehlt - dieses iPhone bekommt eine weisse Seite");
+  });
+  splash.forEach(l => {
+    ok(/media="[^"]*device-width/.test(l), "jedes Startbild braucht seine media-Query: " + l);
+    const datei = (l.match(/href="\.\/([^"]+)"/) || [])[1];
+    ok(datei && fs.existsSync(path.join(root, datei)), "Datei fehlt: " + datei);
+  });
+});
+
+t("Das Manifest erfuellt die Installations-Kriterien", () => {
+  const m = JSON.parse(fs.readFileSync(path.join(root, "manifest.webmanifest"), "utf8"));
+  eq(m.display, "standalone", "sonst startet es als Browser-Tab");
+  ok(m.name && m.short_name, "Name und Kurzname");
+  ok(m.start_url, "Startadresse");
+  const png = (m.icons || []).filter(i => i.type === "image/png");
+  ok(png.some(i => i.sizes === "192x192"), "Chrome verlangt 192x192 als PNG");
+  ok(png.some(i => i.sizes === "512x512"), "und 512x512");
+  ok((m.icons || []).some(i => i.purpose === "maskable"),
+     "ohne maskable schneidet Android das Board an");
+  png.forEach(i => {
+    const d = i.src.replace("./", "");
+    ok(fs.existsSync(path.join(root, d)), "Icon-Datei fehlt: " + d);
+  });
+});
+
+t("Der Service Worker cacht die App-Icons mit", () => {
+  const sw = fs.readFileSync(path.join(root, "sw.js"), "utf8");
+  ["icon-192.png", "icon-512.png", "apple-touch-icon.png"].forEach(f => {
+    ok(sw.includes(f), f + " fehlt in der Offline-Liste");
+  });
+  const m = JSON.parse(fs.readFileSync(path.join(root, "manifest.webmanifest"), "utf8"));
+  ok(sw.includes("manifest.webmanifest"), "das Manifest selbst auch");
+  ok(m.icons.length >= 3, "und es gibt genug Icons");
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");

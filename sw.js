@@ -2,8 +2,10 @@
 // Strategie bewusst "network first": beim naechsten Oeffnen mit Netz kommt immer
 // der frische Stand; ohne Netz kommt der letzte gecachte. Ein cache-first-SW
 // wuerde auf dem Handy eine alte Version festnageln, die niemand mehr loswird.
-var CACHE = "darts-v1";
-var ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
+var CACHE = "darts-v2";
+var ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg",
+              "./icon-192.png", "./icon-512.png", "./icon-512-maskable.png",
+              "./apple-touch-icon.png"];
 
 self.addEventListener("install", function(e){
   self.skipWaiting();
