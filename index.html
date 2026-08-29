@@ -186,6 +186,7 @@
   .lastturn.dead{color:var(--gold);}
   .turn .info{display:flex; justify-content:space-between; align-items:center; font-size:13px;}
   .turn .co{color:var(--gold); font-weight:700;}
+  .turn .co.stell{color:var(--accent2);}
   .turn .sum{color:var(--muted);} .turn .sum b{color:var(--text);}
 
   .mult{display:flex; gap:8px; margin-bottom:8px;}
@@ -301,7 +302,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.26";
+var VER    = "1.27";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -577,6 +578,53 @@ function checkout(score, dartsLeft, doubleOut){
 }
 
 // ---------------------------------------------------------------------------
+// Stell-Empfehlung: worauf werfen, wenn es nicht zum Ausmachen reicht?
+//
+// Beim Darts stellt man sich fuer die naechste Runde hin - am liebsten auf 32
+// (D16), weil sich das beim Danebenwerfen sauber halbiert. Das hat man sonst im
+// Kopf, oder eben nicht: bei Rest 41 wirft man die 9, nicht die 20.
+// ---------------------------------------------------------------------------
+
+// Wie gut steht man auf diesem Rest? Groesser = besser.
+function restGuete(rest, doubleOut){
+  if(rest < 2) return -1000;                        // 0 waere ein Finish, 1 ist tot
+  if(doubleOut && rest === 1) return -1000;
+  if(BOGEY[rest]) return -500;                      // 159, 162, 163 ... da steht man schlecht
+
+  // Direkt auf einem Doppel: das ist die beste Lage ueberhaupt.
+  var i = DOPPEL_VORLIEBE.indexOf(rest);
+  if(i >= 0 && doubleOut) return 900 - i * 10;
+  if(!doubleOut && rest <= 60 && checkout(rest, 1, false)) return 900;
+
+  // Sonst: wie viele Darts braucht man noch?
+  if(checkout(rest, 2, doubleOut)) return 500 - rest / 10;
+  if(checkout(rest, 3, doubleOut)) return 200 - rest / 10;
+  return 50 - rest / 10;                            // ausserhalb der Reichweite
+}
+
+var BOGEY = {159:1, 162:1, 163:1, 165:1, 166:1, 168:1, 169:1};
+
+// Der beste Wurf, wenn kein Finish moeglich ist. Rueckgabe {label, ziel} oder null.
+function stellEmpfehlung(rest, dartsLeft, doubleOut){
+  if(dartsLeft < 1) return null;
+  if(checkout(rest, dartsLeft, doubleOut)) return null;   // ausspielbar: dann kein Stellen
+
+  var best = null;
+  for(var i=0;i<ALLTHROWS.length;i++){
+    var w = ALLTHROWS[i];
+    var ziel = rest - w.value;
+    if(ziel < 2) continue;                                // Bust oder Finish, beides hier falsch
+    var g = restGuete(ziel, doubleOut);
+    // Wie schwer ist der Wurf selbst? Ein Single ist sicherer als ein Triple.
+    g -= stellKosten(w.label) * 2;
+    // Bleiben noch Darts uebrig, zaehlt zusaetzlich, ob man DANN ausmachen kann.
+    if(dartsLeft > 1 && checkout(ziel, dartsLeft - 1, doubleOut)) g += 400;
+    if(!best || g > best.g) best = { g:g, label:w.label, ziel:ziel };
+  }
+  return best ? { label:best.label, ziel:best.ziel } : null;
+}
+
+// ---------------------------------------------------------------------------
 // Spiel-Logik
 // ---------------------------------------------------------------------------
 function rosterOf(id){ return state.roster.find(function(p){return p.id===id;}); }
@@ -718,7 +766,29 @@ function sayLastTurn(){
   var lt = state.match && state.match.lastTurn; if(!lt) return;
   if(lt.kind==="bust")         say(lt.name+". Überworfen. Zurück auf "+lt.rest);
   else if(lt.kind==="nostart") say("Noch kein Doppel");
-  else if(lt.kind==="ok" && lt.labels.length) say(lt.name+" "+lt.sum+". Rest "+lt.rest);
+  else if(lt.kind==="ok" && lt.labels.length){
+    // Nach der Aufnahme gleich sagen, worauf man sich stellt - beim weggelegten
+    // Handy ist das der halbe Nutzen des Sprachmodus.
+    var rat = state.match ? ratText(lt.rest, 3, state.match.doubleOut) : "";
+    say(lt.name+" "+lt.sum+". Rest "+lt.rest+(rat?". "+rat:""));
+  }
+}
+
+// Was jetzt sinnvoll ist - Finish oder Stellen. Wird an die Ansage angehaengt,
+// damit man beim weggelegten Handy weiss, worauf man zielt.
+function ratText(rest, dartsLeft, doubleOut){
+  var co = checkout(rest, dartsLeft, doubleOut);
+  if(co) return "Finish: " + co.map(function(l){ return sagbar(l); }).join(", ");
+  var st = stellEmpfehlung(rest, dartsLeft, doubleOut);
+  if(st) return "Stell dich mit " + sagbar(st.label) + " auf " + st.ziel;
+  return "";
+}
+// "T20" -> "Triple 20", damit die Ansage nach Sprache klingt statt nach Code
+function sagbar(label){
+  if(label==="Bull") return "Bull";
+  var m2 = /^([TD])?(\d+)$/.exec(label);
+  if(!m2) return label;
+  return (m2[1]==="T" ? "Triple " : m2[1]==="D" ? "Doppel " : "") + m2[2];
 }
 
 function endTurn(kind){
@@ -1319,11 +1389,17 @@ function renderGame(){
     slots += '<div class="slot'+cls+'">'+(d?d.label:"&middot;")+'</div>';
   }
   var turnSum = m.currentTurn.reduce(function(s,d){return s+d.value;},0);
+  var rest3 = 3-m.currentTurn.length;
   var co = (m.doubleIn && cur.legStart)
-    ? null : checkout(cur.score, 3-m.currentTurn.length, m.doubleOut);
-  var coHtml = (m.doubleIn && cur.legStart)
-    ? '<span class="co">Doppel-In: erst ein Doppel eröffnet</span>'
-    : (co ? '<span class="co">Finish: '+co.join(" ")+'</span>' : '<span class="muted">&nbsp;</span>');
+    ? null : checkout(cur.score, rest3, m.doubleOut);
+  var stell = (co || (m.doubleIn && cur.legStart))
+    ? null : stellEmpfehlung(cur.score, rest3, m.doubleOut);
+  var coHtml;
+  if(m.doubleIn && cur.legStart) coHtml = '<span class="co">Doppel-In: erst ein Doppel eröffnet</span>';
+  else if(co)    coHtml = '<span class="co">Finish: '+co.join(" ")+'</span>';
+  else if(stell) coHtml = '<span class="co stell">Stellen: <b>'+stell.label+'</b> &rarr; '
+                          + stell.ziel+'</span>';
+  else           coHtml = '<span class="muted">&nbsp;</span>';
 
   function mb(mv,l){ return '<button class="btn'+(curMult===mv?" on":"")+'" data-act="mult" data-m="'+mv+'">'+l+'</button>'; }
   var nums = "";
@@ -2230,7 +2306,7 @@ function sayLabel(mult,num){
 //    genau das loest Lions Beispiel "14, doppelt 2, 3" korrekt zu S14/D2/S3 auf.
 function parseSpeech(text, names){
   names = names || [];
-  var out = {throws:[], name:null, cmd:null, raw:text};
+  var out = {throws:[], name:null, cmd:null, raw:text, zuGross:[]};
   var s = (text||"").toLowerCase().replace(/[.,;:!?]/g," ").replace(/-/g," ").replace(/\s+/g," ").trim();
   if(!s) return out;
   // Reihenfolge zaehlt: "stimmt nicht" ist eine Korrektur, "stimmt" eine Zusage.
@@ -2259,7 +2335,10 @@ function parseSpeech(text, names){
     var num=tk.v, mult=1;
     if(num===0||num===25||num===50){ pset=false; }
     else if(num>=1 && num<=20){ if(pset){ mult=pending; pset=false; } }
-    else { pset=false; continue; }                       // ungueltige Zahl (>20) -> verwerfen
+    else {                                               // keine Wurf-Zahl (z.B. 60)
+      if(num>20 && num<=180) out.zuGross.push(num);      // gemerkt, nicht verschluckt
+      pset=false; continue;
+    }
     var dv = dartValue(mult, num);
     out.throws.push({mult:mult, num:num, label:dv.label, say:sayLabel(mult,num)});
     if(out.throws.length>=3) break;                      // eine Aufnahme = max 3 Darts
@@ -2286,7 +2365,7 @@ function ensureRecog(){
                    confidence:(res[i]&&typeof res[i].confidence==="number")?res[i].confidence:0 });
     }
     var w = besteAlternative(liste);
-    if(w.p){ ueberhoert = 0; applySpokenResult(w.p, w.text); }
+    if(w.p) hoerEreignis(w.text, 1);      // eine Stelle fuer Filter UND Grenzfaelle
     else ansageVerworfen(w.text);
   };
   recog.onerror = function(ev){
@@ -2357,19 +2436,18 @@ function istWurfWort(w){
 // Klingt das nach einer Ansage - oder nach einem Songtext, in dem zufaellig
 // eine Zahl vorkam? sicherheit ist der confidence-Wert des Browsers; 0 oder
 // undefined heisst "keine Angabe" und darf deshalb NICHT zur Ablehnung führen.
+// Alles, worin ein Wurf oder ein Kommando steckt, wird angenommen.
+//
+// Hier stand kurzzeitig ein Filter gegen Hintergrundmusik (Wortanteil-Quote +
+// confidence-Schwelle). Er ist wieder raus: "Arne hat Triple 20 geworfen" sind
+// fuenf Woerter mit zwei Treffern = 40 % und waere abgelehnt worden, und Chrome
+// meldet auch bei sauberer Sprache manchmal niedrige Sicherheiten. Ein Filter,
+// der echte Ansagen schluckt, ist schlimmer als das Problem, das er loesen soll
+// - zumal Musik selten Wurf-Vokabular enthaelt.
+// Wer es doch braucht: der Schalter "Name muss dabei sein" in den Einstellungen.
 function ansageBrauchbar(p, rohtext, sicherheit){
-  if(p && p.cmd) return true;                    // Kommandos sind kurz und eindeutig
-  if(!p || !p.throws.length) return false;
-
-  if(typeof sicherheit === "number" && sicherheit > 0 && sicherheit < 0.45) return false;
-
-  var s = String(rohtext||"").toLowerCase().replace(/[.,;:!?]/g," ").replace(/-/g," ").trim();
-  var woerter = s.split(/\s+/).filter(Boolean);
-  if(woerter.length <= 4) return true;            // "Triple 20, 20, Doppel 5" ist kurz
-
-  var treffer = 0;
-  for(var i=0;i<woerter.length;i++) if(istWurfWort(woerter[i])) treffer++;
-  return (treffer / woerter.length) >= 0.5;
+  if(p && p.cmd) return true;
+  return !!(p && p.throws.length);
 }
 
 // Aus den Alternativen des Browsers die erste nehmen, die WIE EINE ANSAGE
@@ -2403,6 +2481,14 @@ function ansageVerworfen(text){
 function hoerEreignis(text, sicherheit){
   var p = parseSpeech(text, currentNames());
   if(!ansageBrauchbar(p, text, sicherheit)){ ansageVerworfen(text); return false; }
+  if(p.zuGross.length && !p.cmd){
+    // "60 20 5" ergaebe sonst 25 statt 85 Punkte - lieber nachfragen.
+    ueberhoert = 0;
+    updateVoiceStatus('&#9888;&#65039; <b>'+p.zuGross[0]+'</b> ist kein einzelner Wurf. '
+      + 'Sag die Würfe einzeln &ndash; z.B. „Triple 20" statt „60".');
+    say(p.zuGross[0] + " ist kein einzelner Wurf. Sag zum Beispiel Triple 20.");
+    return false;
+  }
   ueberhoert = 0;                    // wieder verstanden - Zaehler zurueck
   applySpokenResult(p, text);
   return true;
@@ -2631,8 +2717,12 @@ function applySpokenResultInner(p, rawTxt){
     return;
   }
   var extra = (applied.length<p.throws.length) ? ' (Aufnahme voll, Rest verworfen)' : '';
-  updateVoiceStatus('&#127919; '+esc(cur.name)+': <b>'+esc(labels)+'</b> &middot; Rest <b>'+cur.score+'</b>'+extra);
-  say(spoken+". Rest "+cur.score);
+  // Nach jedem Wurf gleich sagen, was jetzt sinnvoll ist - mit weggelegtem
+  // Handy ist das der halbe Nutzen des Sprachmodus.
+  var rat = ratText(cur.score, 3-m.currentTurn.length, m.doubleOut);
+  updateVoiceStatus('&#127919; '+esc(cur.name)+': <b>'+esc(labels)+'</b> &middot; Rest <b>'+cur.score+'</b>'
+    + extra + (rat ? ' &middot; <span class="co">'+esc(rat)+'</span>' : ''));
+  say(spoken+". Rest "+cur.score+(rat?". "+rat:""));
 }
 
 // ---------------------------------------------------------------------------
@@ -2953,6 +3043,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   besteAlternative:besteAlternative, ueberhoertZahl:function(){ return ueberhoert; },
   getRecog:function(){ return recog; }, ensureRecog:ensureRecog,
   applyTurnSum:applyTurnSum, sumMode:sumMode,
+  stellEmpfehlung:stellEmpfehlung, restGuete:restGuete,
   reload:function(){ state=load(); view=restoreView(); },
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
   startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,

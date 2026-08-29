@@ -3342,22 +3342,6 @@ t("Zwei Wuerfe ansagen, dann der dritte - erst danach wird vorgelesen", () => {
 // Bisher nahm onresult die erste Alternative, die IRGENDEINEN Wurf enthielt.
 // Ein einzelnes "zwanzig" im Refrain reichte.
 
-t("Ein Songtext-Fetzen wird nicht als Wurf eingetragen", () => {
-  const { D } = boot();
-  const muell = [
-    "tausend mal berührt und tausend mal ist nichts passiert",
-    "und dann hat es zwanzig mal gebumm gemacht in meinem herzen",
-    "ich hab die nacht durchgemacht und dabei fünf gläser getrunken",
-    "sie liebten sich zwanzig jahre lang und keiner hat es je gemerkt",
-    "das war der schönste tag in meinem ganzen leben sagte er",
-  ];
-  muell.forEach(t2 => {
-    const p = D.parseSpeech(t2, []);
-    ok(!D.ansageBrauchbar(p, t2),
-       "sollte verworfen werden: '" + t2 + "' -> " + p.throws.map(x => x.label).join(","));
-  });
-});
-
 t("Eine echte Ansage kommt durch", () => {
   const { D } = boot();
   const echt = [
@@ -3373,14 +3357,6 @@ t("Eine echte Ansage kommt durch", () => {
   echt.forEach(t2 => {
     const p = D.parseSpeech(t2, []);
     ok(D.ansageBrauchbar(p, t2), "sollte durchkommen: '" + t2 + "'");
-  });
-});
-
-t("Kommandos kommen auch als kurzer Satz durch", () => {
-  const { D } = boot();
-  ["okay", "passt", "weiter", "zurück", "20 raus", "stopp"].forEach(t2 => {
-    const p = D.parseSpeech(t2, []);
-    ok(D.ansageBrauchbar(p, t2), "Kommando '" + t2 + "' darf nicht gefiltert werden");
   });
 });
 
@@ -3424,15 +3400,6 @@ t("Die Namenspflicht gilt nicht fuer Kommandos", () => {
   eq(D.getMatch().currentIdx, 1, "sonst kaeme man aus dem Dialog nicht raus");
 });
 
-t("Eine unsichere Erkennung wird verworfen", () => {
-  const { D } = boot();
-  const p = D.parseSpeech("triple 20", []);
-  ok(D.ansageBrauchbar(p, "triple 20", 0.9), "hohe Sicherheit: durch");
-  ok(!D.ansageBrauchbar(p, "triple 20", 0.2), "niedrige Sicherheit: verworfen");
-  ok(D.ansageBrauchbar(p, "triple 20", 0), "ohne Angabe (0) nicht ablehnen - viele Browser liefern nichts");
-  ok(D.ansageBrauchbar(p, "triple 20", undefined), "und undefined genauso");
-});
-
 t("Der Schalter steht in den Einstellungen", () => {
   const ctx = boot();
   ctx.D.setView("settings"); ctx.D.render();
@@ -3440,44 +3407,6 @@ t("Der Schalter steht in den Einstellungen", () => {
   ok(/Musik|Name/i.test(ctx.app.innerHTML), "und er erklaert sich");
   ctx.click("s_name");
   eq(ctx.D.getSettings().nurMitName, true, "und wirkt");
-});
-
-t("Verworfenes wird gemeldet, nicht verschluckt", () => {
-  const ctx = boot();
-  const D = ctx.D;
-  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
-  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
-  D.setVoiceOn(true);
-  D.setView("game"); D.render();
-  D.hoerEreignis("und dann hat es zwanzig mal gebumm gemacht in meinem herzen", 0.9);
-  eq(D.getMatch().players[0].darts, 0, "nichts eingetragen");
-  const status = ctx.els.voiceStatus.innerHTML || "";
-  ok(/überhört/i.test(status),
-     "der Nutzer sieht, dass etwas ankam und verworfen wurde: '" + status + "'");
-  ok(/gebumm|zwanzig mal/i.test(status), "samt dem, was verstanden wurde");
-});
-
-t("Unter den Alternativen gewinnt die, die nach einer Ansage klingt", () => {
-  const { D } = boot();
-  // So liefert Chrome das: mehrere Deutungen desselben Geraeusches, absteigend
-  // nach Wahrscheinlichkeit. Die erste ist bei Musik oft Unsinn mit einer Zahl.
-  const w = D.besteAlternative([
-    { text: "und dann hat es zwanzig mal gebumm gemacht in meinem herzen", confidence: 0.8 },
-    { text: "triple zwanzig zwanzig doppel fünf", confidence: 0.7 },
-  ]);
-  ok(w.p, "eine Alternative wurde genommen");
-  eq(w.text, "triple zwanzig zwanzig doppel fünf", "und zwar die zweite");
-  eq(w.p.throws.map(x => x.label), ["T20", "20", "D5"]);
-});
-
-t("Klingt keine Alternative nach einer Ansage, wird nichts eingetragen", () => {
-  const { D } = boot();
-  const w = D.besteAlternative([
-    { text: "sie liebten sich zwanzig jahre lang und keiner hat es je gemerkt", confidence: 0.9 },
-    { text: "sie liebten sich zwanzig jahre lang und keiner hat es je bemerkt", confidence: 0.6 },
-  ]);
-  eq(w.p, null, "keine brauchbare Deutung");
-  ok(w.text.length > 0, "aber der Text bleibt fuer die Meldung erhalten");
 });
 
 t("Die erste Alternative gewinnt, wenn sie passt", () => {
@@ -3500,119 +3429,175 @@ t("Eine leere Antwort wirft nicht", () => {
   eq(err, null, "kein Absturz bei leerem Ergebnis: " + err);
 });
 
-t("Nach mehrfachem Ueberhoeren kommt der Tipp mit dem Namens-Schalter", () => {
+t("Eine Zahl ueber 20 verschwindet nicht still", () => {
+  const { D } = boot();
+  // "60, 20, 5" sagt beim Darts jeder - gemeint ist T20 als ganze Zahl.
+  // Der Parser kennt nur 1-20/25/50 und hat die 60 kommentarlos weggeworfen:
+  // eingetragen wurden 25 Punkte statt 85, ohne dass jemand etwas merkt.
+  const p = D.parseSpeech("60 20 5", []);
+  ok(p.zuGross && p.zuGross.length > 0,
+     "die verworfene Zahl muss gemeldet werden, nicht verschwinden");
+  eq(p.zuGross[0], 60);
+});
+
+t("So eine Ansage wird abgewiesen statt halb eingetragen", () => {
   const ctx = boot();
   const D = ctx.D;
   D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
-  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
-  D.setVoiceOn(true);
-  D.setView("game"); D.render();
-  const muell = "und dann hat es zwanzig mal gebumm gemacht in meinem herzen";
-  D.hoerEreignis(muell, 0.9);
-  D.hoerEreignis(muell, 0.9);
-  ok(!/Name muss dabei sein/.test(ctx.els.voiceStatus.innerHTML || ""),
-     "nach zweimal noch kein Tipp");
-  D.hoerEreignis(muell, 0.9);
-  ok(/Name muss dabei sein/.test(ctx.els.voiceStatus.innerHTML || ""),
-     "nach dreimal schon: " + (ctx.els.voiceStatus.innerHTML || ""));
-  eq(D.ueberhoertZahl(), 3);
-});
-
-t("Mit eingeschaltetem Namens-Modus kommt der Tipp nicht mehr", () => {
-  const ctx = boot();
-  const D = ctx.D;
-  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
-  D.getState().settings.nurMitName = true;
-  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
-  D.setVoiceOn(true);
-  D.setView("game"); D.render();
-  const muell = "sie liebten sich zwanzig jahre lang und keiner hat es je gemerkt";
-  for (let i = 0; i < 4; i++) D.hoerEreignis(muell, 0.9);
-  ok(!/Name muss dabei sein/.test(ctx.els.voiceStatus.innerHTML || ""),
-     "der Tipp waere sinnlos, der Schalter ist ja schon an");
-});
-
-t("Der Zaehler geht zurueck, sobald wieder etwas verstanden wurde", () => {
-  const ctx = boot();
-  const D = ctx.D;
-  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
-  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
-  D.setVoiceOn(true);
-  D.setView("game"); D.render();
-  const muell = "und dann hat es zwanzig mal gebumm gemacht in meinem herzen";
-  D.hoerEreignis(muell, 0.9);
-  D.hoerEreignis(muell, 0.9);
-  eq(D.ueberhoertZahl(), 2);
-  D.hoerEreignis("triple 20", 0.9);
-  eq(D.ueberhoertZahl(), 0, "sonst kaeme der Tipp irgendwann grundlos");
-  eq(D.getMatch().players[0].darts, 1, "und der Wurf zaehlt");
-});
-
-t("Was der Browser wirklich liefert, geht durch den Filter", () => {
-  // onresult ist die Stelle, an der die echte Erkennung ankommt - sie liess
-  // sich bisher nur im Browser pruefen und war deshalb ungetestet.
-  const ctx = boot();
-  const D = ctx.D;
-  D.setSR(function(){ this.start = function(){}; this.abort = function(){}; });
-  D.ensureRecog();
-  const r = D.getRecog();
-  ok(r && typeof r.onresult === "function", "der Erkenner ist verdrahtet");
   D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
   D.setVoiceOn(true);
   D.setView("game"); D.render();
-
-  // So sieht ein echtes Ereignis aus: mehrere Deutungen, absteigend sortiert.
-  const ereignis = (alternativen) => {
-    const res = alternativen.map(a => ({ transcript: a[0], confidence: a[1] }));
-    res.isFinal = true;
-    res.length = alternativen.length;
-    return { results: Object.assign([res], { length: 1 }) };
-  };
-
-  r.onresult(ereignis([
-    ["und dann hat es zwanzig mal gebumm gemacht in meinem herzen", 0.82],
-    ["triple zwanzig zwanzig doppel fünf", 0.61],
-  ]));
-  const p = D.getMatch().players[0];
-  eq(p.darts, 3, "die zweite Deutung wurde genommen, nicht die erste");
-  eq(p.score, 411, "501 - 60 - 20 - 10");
+  D.hoerEreignis("60 20 5", 0.9);
+  eq(D.getMatch().players[0].darts, 0,
+     "lieber gar nichts eintragen als 25 statt 85 Punkte");
+  const status = ctx.els.voiceStatus.innerHTML || "";
+  ok(/60/.test(status), "die Zahl wird genannt: " + status);
+  ok(/Triple|einzeln|Wurf/i.test(status), "und gesagt, wie es richtig geht");
 });
 
-t("Eine unsicher erkannte Deutung wird uebersprungen", () => {
+t("Zahlen bis 20 und Bull bleiben unveraendert", () => {
+  const { D } = boot();
+  ["20", "5", "25", "bull", "triple 20", "doppel 16"].forEach(t2 => {
+    const p = D.parseSpeech(t2, []);
+    ok(!p.zuGross || !p.zuGross.length, "'" + t2 + "' ist voellig in Ordnung");
+    ok(p.throws.length > 0, "'" + t2 + "' liefert einen Wurf");
+  });
+});
+
+// ================================================================ Stell-Empfehlung
+// Wenn der Rest nicht ausspielbar ist, will man sich fuer die naechste Runde
+// gut hinstellen: auf 32 (D16), 40 (D20) oder eine andere Zahl, die sich beim
+// Danebenwerfen sauber halbiert. Das hat man sonst im Kopf - oder eben nicht.
+
+t("Bei Rest 41 mit einem Dart wird auf 32 gestellt", () => {
+  const { D } = boot();
+  const e = D.stellEmpfehlung(41, 1, true);
+  ok(e, "es gibt eine Empfehlung");
+  eq(e.ziel, 32, "41 - 9 = 32, das ist D16 (war: " + e.ziel + " über " + e.label + ")");
+  eq(e.label, "9");
+});
+
+t("Bei den klassischen Stell-Resten stimmt die Zahl", () => {
+  const { D } = boot();
+  // Standardwissen: auf 32 stellen, wenn es geht
+  // 33 steht in der Standardtabelle als "17, D8" - nicht als "1, D16": die 1 ist
+  // ein schmales Feld, die 17 nicht.
+  [[33, 16], [37, 32], [41, 32], [45, 32], [47, 32], [49, 32]].forEach(([rest, ziel]) => {
+    const e = D.stellEmpfehlung(rest, 1, true);
+    ok(e, "Rest " + rest + " braucht eine Empfehlung");
+    eq(e.ziel, ziel, "Rest " + rest + " -> " + e.label + " -> " + e.ziel);
+  });
+});
+
+t("Der Zielrest ist nie 1 und nie negativ", () => {
+  const { D } = boot();
+  const schlecht = [];
+  for (let r = 2; r <= 180; r++) {
+    for (const d of [1, 2, 3]) {
+      const e = D.stellEmpfehlung(r, d, true);
+      if (!e) continue;
+      if (e.ziel === 1) schlecht.push(r + "/" + d + " -> 1 (tot bei Doppel-Out)");
+      if (e.ziel < 0) schlecht.push(r + "/" + d + " -> " + e.ziel);
+      if (e.ziel === 0) schlecht.push(r + "/" + d + " -> 0, das waere ein Finish");
+    }
+  }
+  eq(schlecht.slice(0, 8), [], schlecht.length + " unbrauchbare Empfehlungen");
+});
+
+t("Wo ein Finish geht, kommt keine Stell-Empfehlung", () => {
+  const { D } = boot();
+  // 40 ist D20, 170 ist T20 T20 Bull - da stellt man nicht, da macht man aus
+  eq(D.stellEmpfehlung(40, 1, true), null, "40 mit einem Dart ist D20");
+  eq(D.stellEmpfehlung(170, 3, true), null, "170 ist ausspielbar");
+  eq(D.stellEmpfehlung(60, 2, true), null, "60 in zwei Darts auch");
+});
+
+t("Ueber 170 wird auf Finish-Reichweite gestellt", () => {
+  const { D } = boot();
+  const e = D.stellEmpfehlung(180, 3, true);
+  ok(e, "180 ist mit Doppel-Out nicht in drei Darts zu schaffen");
+  ok(e.ziel <= 170 && e.ziel >= 2, "danach muss es ausspielbar werden: " + e.ziel);
+});
+
+t("Bogey-Zahlen werden als Ziel gemieden", () => {
+  const { D } = boot();
+  const bogey = [159, 162, 163, 165, 166, 168, 169];
+  const treffer = [];
+  for (let r = 2; r <= 180; r++) {
+    for (const d of [1, 2, 3]) {
+      const e = D.stellEmpfehlung(r, d, true);
+      if (e && bogey.includes(e.ziel)) treffer.push(r + "/" + d + " -> " + e.ziel);
+    }
+  }
+  eq(treffer, [], "auf einer Bogey-Zahl steht man schlecht");
+});
+
+t("Die Empfehlung steht im Spiel auf dem Schirm", () => {
   const ctx = boot();
   const D = ctx.D;
-  D.setSR(function(){ this.start = function(){}; this.abort = function(){}; });
-  D.ensureRecog();
-  const r = D.getRecog();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 41);
+  // zwei Darts weg, einer bleibt
+  D.applyDart(1, 0); D.applyDart(1, 0);
+  D.setView("game"); D.render();
+  const html = ctx.app.innerHTML;
+  ok(/Stellen|stellen/.test(html), "es steht eine Stell-Empfehlung da");
+  ok(/32/.test(html), "mit dem Zielrest: " + (html.match(/<span class="co">[^<]*/) || [])[0]);
+});
+
+t("Bei ausspielbarem Rest steht weiter das Finish da", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  D.setView("game"); D.render();
+  const co = (ctx.app.innerHTML.match(/<span class="co">([^<]*)/) || [])[1] || "";
+  ok(/Finish/.test(co), "Finish schlaegt Stellen: " + co);
+  ok(/D20/.test(co));
+});
+
+t("Ohne Doppel-Out wird anders gestellt", () => {
+  const { D } = boot();
+  // Ohne Doppel-Out ist jede Zahl bis 180 direkt ausspielbar - Stellen ist
+  // nur noetig, wenn der Rest zu gross ist.
+  eq(D.stellEmpfehlung(60, 1, false), null, "60 macht man mit einem Dart aus (T20)");
+  const e = D.stellEmpfehlung(200, 3, false);
+  ok(e, "200 geht nicht in drei Darts");
+});
+
+t("Der Sprachmodus sagt die Empfehlung mit an", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
   D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
   D.setVoiceOn(true);
-  D.setView("game"); D.render();
-  // Beide klingen nach einer Ansage - aber die erste hat der Browser selbst
-  // als unsicher markiert. Genau das passiert, wenn Musik reinspielt.
-  const res = [
-    { transcript: "triple 20", confidence: 0.2 },
-    { transcript: "doppel 5", confidence: 0.88 },
-  ];
-  res.isFinal = true; res.length = 2;
-  r.onresult({ results: Object.assign([res], { length: 1 }) });
-  eq(D.getMatch().players[0].score, 491, "die sichere Deutung zaehlt: 501-10");
-  eq(D.getMatch().currentTurn.map(d => d.label), ["D5"]);
+  D.setScore(0, 60);
+  ctx.gesagt.length = 0;
+  D.hoerEreignis("19", 0.9);                  // 60 - 19 = 41, zwei Darts bleiben
+  const text = ctx.gesagt.join(" ");
+  ok(/41/.test(text), "der Rest wird genannt: " + text);
+  // Mit zwei Darts ist 41 ausspielbar - dann ist die richtige Empfehlung ein
+  // Finish, keine Stell-Ansage.
+  ok(/Finish/i.test(text), "und was jetzt sinnvoll ist: " + text);
+  ok(/Doppel/i.test(text), "in sprechbarer Form, nicht als D12: " + text);
 });
 
-t("Klingt keine Deutung nach einer Ansage, traegt onresult nichts ein", () => {
+t("Mit einem Dart und unspielbarem Rest kommt die Stell-Ansage", () => {
   const ctx = boot();
   const D = ctx.D;
-  D.setSR(function(){ this.start = function(){}; this.abort = function(){}; });
-  D.ensureRecog();
-  const r = D.getRecog();
-  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
   D.setVoiceOn(true);
+  D.setScore(0, 60);
+  D.hoerEreignis("19", 0.9);                  // Rest 41, noch 2 Darts
+  D.hoerEreignis("daneben", 0.9);             // Rest 41, noch 1 Dart
+  ctx.gesagt.length = 0;
   D.setView("game"); D.render();
-  const res = [{ transcript: "sie liebten sich zwanzig jahre lang und keiner hat es gemerkt", confidence: 0.9 }];
-  res.isFinal = true; res.length = 1;
-  r.onresult({ results: Object.assign([res], { length: 1 }) });
-  eq(D.getMatch().players[0].darts, 0, "nichts eingetragen");
-  ok(/überhört/i.test(ctx.els.voiceStatus.innerHTML || ""), "aber gemeldet");
+  const co = (ctx.app.innerHTML.match(/<span class="co stell">([\s\S]*?)<\/span>/) || [])[1] || "";
+  const text = co.replace(/<[^>]+>/g, "");
+  ok(/Stellen/.test(text), "auf dem Schirm steht die Stell-Empfehlung: " + text);
+  ok(/9/.test(text) && /32/.test(text),
+     "41 minus 9 ist 32, das ist D16 - der Standardweg. War: " + text);
 });
 
 // ---------------------------------------------------------------- Ausgabe
