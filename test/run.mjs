@@ -469,6 +469,100 @@ t("Die Kurzform kollidiert nicht mit normalen Zahlen", () => {
   eq(D.parseSpeech("tom 20", ["tom"]).name, "tom");
 });
 
+t("Ausgeschriebene Summen werden erkannt, nicht verschluckt", () => {
+  const { D } = boot();
+  // "sechzig zwanzig zwanzig" ist die normale Kneipen-Ansage. Bisher war
+  // "sechzig" dem Parser unbekannt -> kein Token -> keine Warnung -> die App
+  // buchte still 40 statt 100 und sagte froehlich "Rest 461".
+  const summen = [["sechzig", 60], ["vierzig", 40], ["dreissig", 30], ["dreißig", 30],
+                  ["siebzig", 70], ["achtzig", 80], ["neunzig", 90],
+                  ["sechsundzwanzig", 26], ["einundachtzig", 81], ["dreiundvierzig", 43],
+                  ["hundert", 100], ["hundertachtzig", 180], ["einhundertachtzig", 180],
+                  ["hundertvierzig", 140], ["hundertsechsundzwanzig", 126]];
+  const falsch = [];
+  for (const [wort, zahl] of summen) {
+    const r = D.parseSpeech(wort, []);
+    if (r.zuGross[0] !== zahl) falsch.push(wort + " -> zuGross " + JSON.stringify(r.zuGross) + ", erwartet " + zahl);
+  }
+  eq(falsch, [], falsch.length + " Summen bleiben unsichtbar");
+});
+
+t("Eine Summe im Satz wird gemeldet, auch wenn Wuerfe dabei sind", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  ctx.gesagt.length = 0;
+  // Der schlimme Fall: zwei Darts werden verstanden, einer verschluckt. Ohne
+  // Warnung steht ein falscher Stand da und niemand merkt es.
+  D.applySpokenResult(D.parseSpeech("sechzig zwanzig zwanzig", []), "sechzig zwanzig zwanzig");
+  const m = D.getMatch();
+  eq(m.players[0].score, 501, "nichts wird gebucht, solange unklar ist was gemeint war");
+  eq(m.currentTurn.length, 0);
+  ok(/kein einzelner Wurf|60/.test(ctx.gesagt.join(" ")),
+     "und es wird gesagt, warum: " + ctx.gesagt.join(" | "));
+});
+
+t("Der Schutz gilt auf BEIDEN Wegen ins Spiel", () => {
+  // hoerEreignis (das Mikro) und applySpokenResult (alles andere) duerfen sich
+  // nicht unterschiedlich verhalten - sonst haengt der Schutz am Zufall.
+  for (const weg of ["hoer", "apply"]) {
+    const ctx = boot();
+    const D = ctx.D;
+    D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+    D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    D.setVoiceOn(true);
+    if (weg === "hoer") D.hoerEreignis("60 20 20", 0.9);
+    else D.applySpokenResult(D.parseSpeech("60 20 20", []), "60 20 20");
+    eq(D.getMatch().players[0].score, 501, "Weg " + weg + " hat still gebucht");
+  }
+});
+
+t("Ein neues Spiel loescht eine haengende Korrektur", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  D.applySpokenResult(D.parseSpeech("20 raus", []), "20 raus");   // wartet auf Ersatz
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  // Die naechste Ansage ist ein WURF, kein Ersatz fuer den alten Wurf.
+  D.applySpokenResult(D.parseSpeech("triple 20", []), "triple 20");
+  eq(D.getMatch().currentTurn.map(d => d.label), ["T20"]);
+  eq(D.getMatch().players[0].score, 441);
+});
+
+t("Im Banner steht kein HTML-Code", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("daneben 20 20", []), "…");
+  D.setView("game"); D.render();
+  const html = ctx.app.innerHTML;
+  ok(!/&amp;#10007;|&amp;amp;#/.test(html),
+     "der Fehlwurf darf nicht als Entity-Text im Satz stehen");
+  ok(/daneben raus|„20 raus/.test(html), "sondern als Wort, das man sagen kann");
+});
+
+t("Die Stell-Empfehlung schweigt, wo sie nichts zu sagen hat", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(!/Stellen/.test(ctx.app.innerHTML),
+     "bei 501 und drei Darts ist 'wirf auf die 20' keine Information");
+  // Wo sie klug ist, bleibt sie: Rest 41, ein Dart -> die 9 auf 32
+  const b = boot();
+  b.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b.D.setScore(0, 41);
+  b.D.applyDart(1, 0); b.D.applyDart(1, 0);
+  b.D.setView("game"); b.D.render();
+  ok(/Stellen/.test(b.app.innerHTML), "hier schon");
+  ok(/D16/.test(b.app.innerHTML), "und sie sagt, WARUM 32 gut ist: " +
+     (b.app.innerHTML.match(/<span class="co[^"]*">([^<]*)/) || [])[1]);
+});
+
 t("parseSpeech: Kommandos und Bull", () => {
   const { D } = boot();
   eq(D.parseSpeech("zurück", []).cmd, "undo");
@@ -3286,7 +3380,7 @@ t("Kommt der Wurf doppelt vor, wird der letzte ersetzt und das gesagt", () => {
   sprich(D, "20 20 20");
   ctx.gesagt.length = 0;
   sprich(D, "zwanzig raus");
-  ok(/letzte|dritte|hinten/i.test(ctx.gesagt.join(" ")),
+  ok(/letzte|dritte|hinten|Wurf 3/i.test(ctx.gesagt.join(" ")),
      "bei mehreren gleichen muss klar sein, welcher gemeint ist: " + ctx.gesagt.join(" "));
   sprich(D, "triple 20");
   eq(D.getMatch().currentTurn.map(d => d.label), ["20", "20", "T20"]);

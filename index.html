@@ -302,7 +302,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.29";
+var VER    = "1.30";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -604,6 +604,24 @@ function restGuete(rest, doubleOut){
 
 var BOGEY = {159:1, 162:1, 163:1, 165:1, 166:1, 168:1, 169:1};
 
+// Bei 501 und drei Darts lautet die Empfehlung immer "wirf auf die 20" - das ist
+// keine Information, sondern Fuellmaterial. Gezeigt wird sie nur da, wo sie etwas
+// weiss, das man sonst im Kopf haben muesste.
+function stellNuetzlich(stell, dartsLeft, doubleOut){
+  if(!stell) return false;
+  if(doubleOut && DOPPEL_VORLIEBE.indexOf(stell.ziel) >= 0) return true;
+  if(dartsLeft > 1 && checkout(stell.ziel, dartsLeft-1, doubleOut)) return true;
+  return false;
+}
+
+// "32" allein sagt nur Kennern etwas. "32 (D16)" sagt es allen.
+function zielName(ziel, doubleOut){
+  if(!doubleOut) return "";
+  if(ziel === 50) return " (Bull)";
+  if(ziel % 2 === 0 && ziel/2 >= 1 && ziel/2 <= 20) return " (D"+(ziel/2)+")";
+  return "";
+}
+
 // Der beste Wurf, wenn kein Finish moeglich ist. Rueckgabe {label, ziel} oder null.
 function stellEmpfehlung(rest, dartsLeft, doubleOut){
   if(dartsLeft < 1) return null;
@@ -691,6 +709,8 @@ function freshPlayer(id, gt){
 
 // opts: {gameType, doubleOut, doubleIn, bestOf, mode}  - fehlendes kommt aus den Einstellungen.
 function startMatch(playerIds, opts){
+  korrigiere = null;    // sonst gilt die naechste Ansage als Ersatz fuer einen
+                        // Wurf, den es im neuen Spiel gar nicht mehr gibt
   opts = opts || {};
   var st = state.settings;
   var gt = opts.gameType || st.gameType;
@@ -783,6 +803,10 @@ function ratText(rest, dartsLeft, doubleOut){
   if(st) return "Stell dich mit " + sagbar(st.label) + " auf " + st.ziel;
   return "";
 }
+// Der Fehlwurf heisst intern "&#10007;". Als Vorschlag im Satz („sag ✗ raus")
+// ist das Unsinn - und escaped steht dort woertlich der Entity-Code.
+function nennbar(label){ return label === "&#10007;" ? "daneben" : label; }
+
 // "T20" -> "Triple 20", damit die Ansage nach Sprache klingt statt nach Code
 function sagbar(label){
   if(label==="Bull") return "Bull";
@@ -1394,11 +1418,12 @@ function renderGame(){
     ? null : checkout(cur.score, rest3, m.doubleOut);
   var stell = (co || (m.doubleIn && cur.legStart))
     ? null : stellEmpfehlung(cur.score, rest3, m.doubleOut);
+  if(!stellNuetzlich(stell, rest3, m.doubleOut)) stell = null;
   var coHtml;
   if(m.doubleIn && cur.legStart) coHtml = '<span class="co">Doppel-In: erst ein Doppel eröffnet</span>';
   else if(co)    coHtml = '<span class="co">Finish: '+co.join(" ")+'</span>';
   else if(stell) coHtml = '<span class="co stell">Stellen: <b>'+stell.label+'</b> &rarr; '
-                          + stell.ziel+'</span>';
+                          + stell.ziel + zielName(stell.ziel, m.doubleOut)+'</span>';
   else           coHtml = '<span class="muted">&nbsp;</span>';
 
   function mb(mv,l){ return '<button class="btn'+(curMult===mv?" on":"")+'" data-act="mult" data-m="'+mv+'">'+l+'</button>'; }
@@ -1417,7 +1442,7 @@ function renderGame(){
     + '</div>'
     + (wartetAufOk()
         ? '<div class="warteok">Stimmt das? Sag <b>„okay"</b> &ndash; oder <b>„'
-          + esc(m.currentTurn[0].label)+' raus"</b>, um einen Wurf zu ändern.</div>'
+          + esc(nennbar(m.currentTurn[0].label))+' raus"</b>, um einen Wurf zu ändern.</div>'
         : '')
     + lastTurnLine(m)
     + '<div class="seg modeseg">'
@@ -2276,6 +2301,32 @@ var ZAHLWORT = {
   "fuenfundzwanzig":25,"fünfundzwanzig":25,"funfundzwanzig":25,
   "fuenfzig":50,"fünfzig":50,"funfzig":50
 };
+// Zehner und Hunderter gehoeren NICHT in die Wurf-Tabelle - sie sind keine
+// gueltigen Einzelwuerfe. Aber sie muessen erkannt werden: "sechzig zwanzig
+// zwanzig" ist die normale Kneipen-Ansage, und wer sie nicht kennt, verschluckt
+// die 60 lautlos und bucht 40 statt 100.
+var ZEHNER = {"zehn":10,"zwanzig":20,"dreissig":30,"dreißig":30,"vierzig":40,
+              "fuenfzig":50,"fünfzig":50,"funfzig":50,"sechzig":60,"siebzig":70,
+              "achtzig":80,"neunzig":90};
+var EINER  = {"ein":1,"eins":1,"zwei":2,"zwo":2,"drei":3,"vier":4,"fuenf":5,"fünf":5,
+              "funf":5,"sechs":6,"sieben":7,"acht":8,"neun":9};
+
+// Gibt die Zahl zurueck oder -1. (0 ist ein gueltiger Wert: "null".)
+function zahlWort(w){
+  if(ZAHLWORT.hasOwnProperty(w)) return ZAHLWORT[w];
+  if(ZEHNER.hasOwnProperty(w)) return ZEHNER[w];
+  if(/^\d+$/.test(w)) return parseInt(w,10);
+  var m = /^(ein)?hundert(.*)$/.exec(w);
+  if(m){
+    if(!m[2]) return 100;
+    var r = zahlWort(m[2]);
+    return r >= 0 ? 100 + r : -1;
+  }
+  m = /^(.+?)und(.+)$/.exec(w);                       // "sechsundzwanzig"
+  if(m && EINER.hasOwnProperty(m[1]) && ZEHNER.hasOwnProperty(m[2]))
+    return EINER[m[1]] + ZEHNER[m[2]];
+  return -1;
+}
 function multWord(w){
   // Die Schreibweisen stammen aus einer Messung gegen den Parser, nicht aus dem
   // Kopf: Chrome gibt bei de-DE "tripple" und "t 20" genauso zurueck wie "triple".
@@ -2331,7 +2382,8 @@ function parseSpeech(text, names){
     var mv = multWord(w); if(mv){ toks.push({t:"m",v:mv}); continue; }
     if(/^(bull|bulls|bullseye|bulle|bullsauge)$/.test(w)){ toks.push({t:"v",v:50}); continue; }
     if(/^(daneben|vorbei|verfehlt|nix|nichts|miss|fehlwurf)$/.test(w)){ toks.push({t:"v",v:0}); continue; }
-    if(ZAHLWORT.hasOwnProperty(w)){ toks.push({t:"v",v:ZAHLWORT[w]}); continue; }
+    var zw = zahlWort(w);
+    if(zw >= 0){ toks.push({t:"v",v:zw}); continue; }
     // "T20" am Stueck - so steht es auf jedem Board und so tippt es jeder.
     var kurz = /^([tds])(\d{1,2})$/.exec(w);
     if(kurz){ toks.push({t:"m",v:multWord(kurz[1])}); toks.push({t:"v",v:parseInt(kurz[2],10)}); continue; }
@@ -2434,7 +2486,7 @@ function updateVoiceStatus(msg){
 // Gehoert dieses Wort zu einer Wurf-Ansage?
 function istWurfWort(w){
   if(/^\d+$/.test(w)) return true;
-  if(ZAHLWORT.hasOwnProperty(w)) return true;
+  if(zahlWort(w) >= 0) return true;
   if(multWord(w)) return true;
   if(/^(bull|bulls|bullseye|bulle|bullsauge)$/.test(w)) return true;
   if(/^(daneben|vorbei|verfehlt|nix|nichts|miss|fehlwurf)$/.test(w)) return true;
@@ -2490,14 +2542,6 @@ function ansageVerworfen(text){
 function hoerEreignis(text, sicherheit){
   var p = parseSpeech(text, currentNames());
   if(!ansageBrauchbar(p, text, sicherheit)){ ansageVerworfen(text); return false; }
-  if(p.zuGross.length && !p.cmd){
-    // "60 20 5" ergaebe sonst 25 statt 85 Punkte - lieber nachfragen.
-    ueberhoert = 0;
-    updateVoiceStatus('&#9888;&#65039; <b>'+p.zuGross[0]+'</b> ist kein einzelner Wurf. '
-      + 'Sag die Würfe einzeln &ndash; z.B. „Triple 20" statt „60".');
-    say(p.zuGross[0] + " ist kein einzelner Wurf. Sag zum Beispiel Triple 20.");
-    return false;
-  }
   ueberhoert = 0;                    // wieder verstanden - Zaehler zurueck
   applySpokenResult(p, text);
   return true;
@@ -2547,10 +2591,12 @@ function korrekturStarten(wurf){
   }
   var wieOft = 0;
   for(var j=0;j<m.currentTurn.length;j++) if(m.currentTurn[j].label===wurf.label) wieOft++;
-  var welcher = wieOft > 1 ? (pos === m.currentTurn.length-1 ? "der letzte " : "der " + (pos+1) + ". ") : "";
+  // "der letzte 20" klingt falsch, egal welches Wort dahinter steht. Die Position
+  // ist ohnehin die nuetzlichere Auskunft: welcher der drei Wuerfe getauscht wird.
+  var welcher = wieOft > 1 ? "Wurf " + (pos+1) + ", " : "";
   korrigiere = { pos: pos, label: wurf.label };
   updateVoiceStatus('Was soll statt <b>'+esc(wurf.label)+'</b> rein?'
-    + (wieOft>1 ? ' <span class="muted">('+(pos===m.currentTurn.length-1?'der letzte':'der '+(pos+1)+'.')+')</span>' : ''));
+    + (wieOft>1 ? ' <span class="muted">(Wurf '+(pos+1)+' von '+m.currentTurn.length+')</span>' : ''));
   say("Okay, " + welcher + sayLabel(wurf.mult, wurf.num) + " raus. Was willst du statt "
       + sayLabel(wurf.mult, wurf.num) + " haben?");
 }
@@ -2610,6 +2656,17 @@ function applySpokenResultInner(p, rawTxt){
     if(p.throws.length){ korrekturAusfuehren(p.throws[0]); return; }
     updateVoiceStatus('Nicht verstanden. Welcher Wurf soll stattdessen rein?');
     say("Nicht verstanden. Welchen Wurf willst du stattdessen?");
+    return;
+  }
+
+  // "sechzig zwanzig zwanzig" ergaebe sonst 40 statt 100 - und zwar lautlos.
+  // Die Pruefung sass frueher im Mikro-Zweig; damit hing der Schutz daran, ueber
+  // WELCHE Funktion die Ansage hereinkam. Hier gilt sie fuer jeden Weg.
+  if(p.zuGross.length && !p.cmd){
+    ueberhoert = 0;
+    updateVoiceStatus('&#9888;&#65039; <b>'+p.zuGross[0]+'</b> ist kein einzelner Wurf. '
+      + 'Sag die Würfe einzeln &ndash; z.B. „Triple 20" statt „60".');
+    say(p.zuGross[0] + " ist kein einzelner Wurf. Sag zum Beispiel Triple 20.");
     return;
   }
 
