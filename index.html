@@ -179,6 +179,20 @@
     font-size:13px; color:var(--gold); line-height:1.45;}
   .warteok b{color:var(--text);}
   .warterow{display:flex; gap:8px; margin-top:10px;}
+  .syncbox{background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:14px;}
+  .synccode{font-size:34px; font-weight:800; letter-spacing:6px; text-align:center;
+            color:var(--gold); font-variant-numeric:tabular-nums;}
+  .row2{display:flex; gap:8px; align-items:stretch;}
+  /* .btn traegt width:100%. In einer Flex-Zeile wird das die flex-basis, und mit
+     flex-shrink:0 nimmt der Knopf die GANZE Breite - gemessen: Knopf 362 px von
+     362 px, das Feld blieb mit 30 px uebrig. Deshalb hier beide ausdruecklich. */
+  .row2 .txt{flex:1 1 0; min-width:0; width:auto;}
+  .row2 .btn{flex:0 0 auto; width:auto; white-space:nowrap; padding:0 18px;}
+  .sublbl.bad{color:var(--red);}
+  .syncbox .ok{color:var(--green); font-weight:600;}
+  .syncbox .bad{color:var(--red); font-weight:600;}
+  .synchint{display:inline-flex; align-items:center; gap:5px; font-size:12px;
+            color:var(--muted); margin-left:8px;}
   .warterow .btn{flex:1; min-width:0;}
   .warterow .btn.wok{background:var(--green); color:#08210f; border-color:transparent; font-weight:700;}
   .lastturn{font-size:12.5px; color:var(--muted); text-align:center; margin:-4px 0 10px;
@@ -305,7 +319,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.31";
+var VER    = "1.32";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -439,11 +453,139 @@ function load(){
 }
 var LIVE_VIEWS = ["game","leg","platz","win","train"];
 var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraendert
+
+// ===================================================================== Zweites Handy
+// Zwei Handys in derselben Runde: eins liegt am Tisch zum Tippen, eins vorne am
+// Board zum Reinsprechen. Beide duerfen alles.
+//
+// Transport ist ntfy.sh - ein oeffentlicher Pub/Sub-Dienst: kein Konto, keine
+// Bibliothek, keine Kosten. Gemessen: 117-349 ms zwischen zwei Geraeten.
+// Der Raumcode IST der Schluessel; wer ihn kennt, ist im Spiel. Fuer Dartspunkte
+// unter Freunden reicht das - es gehen Vornamen und Zahlen darueber, sonst nichts.
+//
+// Uebertragen wird der GANZE Match-Zustand, nicht einzelne Wuerfe. Damit heilt
+// sich der Abgleich selbst: ein Handy, das kurz kein Netz hatte, ist beim
+// naechsten Empfang wieder gleichauf, ohne dass jemand Ereignisse nachzaehlen muss.
+var SYNC_HOST = "https://ntfy.sh/";
+var syncRaum = null;          // Raumcode oder null
+var syncES = null;            // die offene Verbindung
+var syncUhr = 0;              // zaehlt hoch bei JEDER lokalen Aenderung
+var syncGeraet = null;        // wer bin ich - entscheidet bei Gleichstand
+var syncEmpfangend = false;   // waehrenddessen NICHT zurueckfunken (sonst Ping-Pong)
+var syncStatus = "aus";       // aus | verbinde | offen | fehler
+var syncFetch = null;         // im Test austauschbar
+var syncQuelle = null;        // dito fuer die Empfangsseite
+var syncZuletzt = null;       // was zuletzt rausging - damit render() nachfassen kann
+
+function syncCode(){
+  // Ohne I/O/1/0: die werden auf einem Handybildschirm dauernd verwechselt.
+  var abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", c = "";
+  for(var i=0;i<6;i++) c += abc.charAt(Math.floor(Math.random()*abc.length));
+  return c;
+}
+function syncGeraeteId(){
+  if(!syncGeraet){
+    try{ syncGeraet = localStorage.getItem("darts_geraet"); }catch(e){}
+    if(!syncGeraet){
+      syncGeraet = syncCode() + syncCode();
+      try{ localStorage.setItem("darts_geraet", syncGeraet); }catch(e){}
+    }
+  }
+  return syncGeraet;
+}
+function syncTopic(code){ return "darts-" + String(code).toLowerCase(); }
+
+// Was ueber die Leitung geht. Bewusst nur das Spiel - nicht der ganze Speicher:
+// Verlauf, Statistik und Einstellungen bleiben auf jedem Handy privat.
+function syncPaket(){
+  return { v:1, uhr:syncUhr, von:syncGeraeteId(),
+           match: state.match ? JSON.parse(JSON.stringify(state.match)) : null };
+}
+
+function syncSenden(){
+  if(!syncRaum || syncEmpfangend) return false;
+  syncUhr++;
+  syncZuletzt = JSON.stringify(state.match || null);
+  var body = JSON.stringify(syncPaket());
+  var f = syncFetch || (typeof fetch === "function" ? fetch : null);
+  if(!f) return false;
+  try{
+    f(SYNC_HOST + syncTopic(syncRaum), { method:"POST", body:body })
+      .then(function(){}, function(){ syncStatus = "fehler"; });
+  }catch(e){ syncStatus = "fehler"; return false; }
+  return true;
+}
+
+// Kern der Sache, und die einzige Stelle, an der etwas schiefgehen kann.
+function syncUebernehmen(paket){
+  if(!paket || paket.v !== 1) return "ungueltig";
+  if(paket.von === syncGeraeteId()) return "eigenes";       // das eigene Echo
+  // Aelteres darf Neueres NIE ueberschreiben. Bei Gleichstand entscheidet die
+  // Geraete-Kennung - Hauptsache beide Seiten entscheiden gleich.
+  // Wer beitritt, hat noch kein Spiel und funkt einen LEEREN Stand. Ohne diese
+  // Zeile loescht das die laufende Runde auf dem anderen Handy - gemessen: nach
+  // dem Beitreten stand auf BEIDEN Geraeten match:null, das Spiel war weg.
+  // Ein Spiel beendet man auf dem eigenen Handy, nicht ueber die Leitung.
+  if(!paket.match && state.match && !state.match.finished) return "leer";
+  if(paket.uhr < syncUhr) return "aelter";
+  if(paket.uhr === syncUhr && paket.von < syncGeraeteId()) return "gleichstand";
+  syncEmpfangend = true;
+  try{
+    syncUhr = paket.uhr;
+    state.match = paket.match;
+    if(state.match && !state.match.finished && view !== "game") view = "game";
+    save(); render();
+  } finally { syncEmpfangend = false; }
+  return "uebernommen";
+}
+
+function syncOeffnen(code){
+  syncSchliessen();
+  syncRaum = code;
+  syncStatus = "verbinde";
+  var Q = syncQuelle || (typeof EventSource === "function" ? EventSource : null);
+  if(!Q){ syncStatus = "fehler"; return false; }
+  try{
+    // since=15m: ntfy haelt die letzten Nachrichten vor. Damit sieht ein Handy,
+    // das beitritt, SOFORT den laufenden Stand - ohne dass der andere erst etwas
+    // tun muss und ohne eigenes Frage-Antwort-Protokoll.
+    syncES = new Q(SYNC_HOST + syncTopic(code) + "/sse?since=15m");
+    syncES.onopen = function(){ syncStatus = "offen"; render(); };
+    syncES.onerror = function(){ syncStatus = "fehler"; render(); };
+    syncES.onmessage = function(e){
+      var d; try{ d = JSON.parse(e.data); }catch(x){ return; }
+      var inhalt = d && typeof d.message === "string" ? d.message : null;
+      if(!inhalt) return;                       // Beitritts-Meldungen von ntfy
+      var paket; try{ paket = JSON.parse(inhalt); }catch(x){ return; }
+      syncUebernehmen(paket);
+    };
+  }catch(e){ syncStatus = "fehler"; return false; }
+  return true;
+}
+// Der Haken in save() ist der schnelle Weg. Er haengt aber daran, dass jeder
+// Aufrufer save() auch wirklich ruft - gemessen: endTurn() allein tat es nicht,
+// und der Stand lief zwischen zwei Handys auseinander, ohne dass etwas meldete.
+// Deshalb faehrt render() hinterher und reicht nach, was liegen geblieben ist.
+function syncNachfassen(){
+  if(!syncRaum || syncEmpfangend) return false;
+  // Solange dieses Handy selbst nichts hat, draengt es auch nichts auf.
+  if(!state.match && syncZuletzt === null) return false;
+  if(JSON.stringify(state.match || null) === syncZuletzt) return false;
+  return syncSenden();
+}
+
+function syncSchliessen(){
+  if(syncES){ try{ syncES.close(); }catch(e){} }
+  syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
+}
+function syncAn(){ return !!syncRaum; }
+
 function save(){
   try{
     if(typeof view!=="undefined") state._view = LIVE_VIEWS.indexOf(view)>=0 ? view : "home";
     localStorage.setItem(KEY, JSON.stringify(state));
     speicherKaputt = false;
+    syncSenden();          // eine lokale Aenderung geht ans zweite Handy
     return true;
   }catch(e){
     // Nicht schlucken: sonst spielt man einen Abend durch und alles ist weg,
@@ -1865,6 +2007,37 @@ function istSafariOhneInstall(){
   }catch(e){ return false; }
 }
 
+// Der Bedienteil zum Sync. Bewusst zwei getrennte Wege: einer macht den Raum
+// auf, der andere tritt bei - "verbinden" allein waere mehrdeutig.
+function syncBlock(){
+  if(syncAn()){
+    var wie = syncStatus === "offen" ? '<span class="ok">verbunden</span>'
+            : syncStatus === "fehler" ? '<span class="bad">keine Verbindung</span>'
+            : '<span class="muted">verbinde …</span>';
+    return '<div class="syncbox">'
+      + '<div class="synccode">' + esc(syncRaum) + '</div>'
+      + '<div class="sublbl">Auf dem anderen Handy diesen Code eintippen. ' + wie + '</div>'
+      + '<div class="stack" style="margin-top:10px">'
+      +   '<button class="btn" data-act="sync_aus">Verbindung trennen</button>'
+      + '</div></div>';
+  }
+  return '<div class="sublbl" style="margin:0 0 8px">'
+    +   'Eins am Tisch, eins an der Scheibe &ndash; beide tragen ein.</div>'
+    + '<div class="stack">'
+    +   '<button class="btn" data-act="sync_neu">&#128241;&nbsp; Raum &ouml;ffnen</button>'
+    + '</div>'
+    + '<div class="row2" style="margin-top:8px">'
+    +   '<input class="txt" id="syncCodeEin" placeholder="Code eingeben" '
+    +     'autocomplete="off" autocapitalize="characters" maxlength="6">'
+    +   '<button class="btn" data-act="sync_bei">Beitreten</button>'
+    + '</div>'
+    + (syncMsg ? '<div class="sublbl bad" style="margin-top:6px">' + esc(syncMsg) + '</div>' : '')
+    + '<div class="sublbl" style="margin-top:10px">&#9432; &Uuml;ber ntfy.sh &ndash; kein Konto, '
+    +   'keine Kosten. Es gehen nur die Namen und Zahlen der Runde raus. '
+    +   '<b>Der Code ist der Schl&uuml;ssel.</b></div>';
+}
+var syncMsg = "";
+
 function renderSettings(){
   var st = state.settings;
   function seg3(act, val, opts){
@@ -1909,6 +2082,8 @@ function renderSettings(){
     + '<div class="infoline"><b>'+nGames+'</b> '+(nGames===1?'Spiel':'Spiele')
       + ' &middot; <b>'+nPlayers+'</b> Spieler &middot; Version '+VER+'</div>'
 
+    + '<label class="lbl" style="margin-top:16px">Zweites Handy</label>'
+    + syncBlock()
     + '<label class="lbl" style="margin-top:16px">Sicherung</label>'
     + '<div class="stack">'
     +   '<button class="btn" data-act="s_export">&#11015;&#65039;&nbsp; Als Datei sichern</button>'
@@ -2262,6 +2437,7 @@ function renderPlayer(){
 }
 
 function render(){
+  syncNachfassen();      // faengt Aenderungen, die kein save() ausgeloest haben
   if(view!=="game" && view!=="leg" && view!=="platz"
      && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Runden an
   var el = document.getElementById("app");
@@ -2854,6 +3030,23 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="resume"){ view="game"; save(); render(); return; }
   if(act==="resumetrain"){ view="train"; save(); render(); return; }
+  if(act==="sync_neu"){
+    syncMsg = "";
+    if(!syncOeffnen(syncCode())) syncMsg = "Dieses Handy kann keine Verbindung aufbauen.";
+    else if(state.match) syncSenden();       // der Beitretende soll sofort den Stand sehen
+    render(); return;
+  }
+  if(act==="sync_bei"){
+    var f = document.getElementById("syncCodeEin");
+    var code = ((f ? f.value : "") || "").trim().toUpperCase();
+    if(code.length !== 6){ syncMsg = "Der Code hat sechs Zeichen."; render(); return; }
+    syncMsg = "";
+    if(!syncOeffnen(code)) syncMsg = "Dieses Handy kann keine Verbindung aufbauen.";
+    else if(state.match) syncSenden();       // nur wer selbst etwas hat, meldet sich mit Stand
+    render(); return;
+  }
+  if(act==="sync_aus"){ syncSchliessen(); syncMsg = ""; render(); return; }
+
   if(act==="abort"){ if(confirm("Aktuelles Spiel verwerfen?")){ state.match=null; save(); render(); } return; }
 
   // Roster
@@ -3145,6 +3338,12 @@ document.getElementById("app").addEventListener("click", function(ev){
 
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
+  syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
+  syncNachfassen:syncNachfassen,
+  syncUebernehmen:syncUebernehmen, syncPaket:syncPaket, syncAn:syncAn, syncCode:syncCode,
+  syncStand:function(){ return { raum:syncRaum, uhr:syncUhr, status:syncStatus, geraet:syncGeraeteId() }; },
+  setSyncTransport:function(f, q){ syncFetch=f; syncQuelle=q; },
+  setSyncUhr:function(u){ syncUhr=u; }, setSyncGeraet:function(g){ syncGeraet=g; },
   parseSpeech:parseSpeech, applySpokenResult:applySpokenResult,
   bumpWins:bumpWins, setWins:setWins, getRoster:function(){return state.roster;},
   render:render, getMatch:function(){return state.match;},

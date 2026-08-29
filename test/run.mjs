@@ -642,6 +642,217 @@ t("Nach einem Sieg per Sprache kommt man zurueck", () => {
   eq(D.getMatch().players[0].score, 40, "der Stand ist wieder wie vorher");
 });
 
+// ================================================================ Zweites Handy
+// Der Sync haengt an einem fremden Dienst. Getestet wird deshalb die LOGIK mit
+// einer Attrappe - was ueber die Leitung geht, ist danach nur noch Transport.
+
+function syncBoot() {
+  const ctx = boot();
+  const gesendet = [];
+  let horcher = null;
+  const fakeFetch = (url, opt) => {
+    gesendet.push({ url, body: JSON.parse(opt.body) });
+    return Promise.resolve({ ok: true });
+  };
+  function FakeES(url) {
+    this.url = url; this.onmessage = null; this.onopen = null; this.onerror = null;
+    horcher = this;
+    setTimeout(() => this.onopen && this.onopen(), 0);
+  }
+  FakeES.prototype.close = function () { horcher = null; };
+  ctx.D.setSyncTransport(fakeFetch, FakeES);
+  // So kommt eine Nachricht vom anderen Handy an: ntfy verpackt sie in .message
+  ctx.rein = (paket) => horcher && horcher.onmessage &&
+    horcher.onmessage({ data: JSON.stringify({ id: "x", message: JSON.stringify(paket) }) });
+  ctx.gesendet = gesendet;
+  return ctx;
+}
+
+t("Ein Raumcode ist auf einem Handy lesbar", () => {
+  const { D } = boot();
+  const codes = new Set();
+  for (let i = 0; i < 200; i++) {
+    const c = D.syncCode();
+    eq(c.length, 6, "sechs Zeichen: " + c);
+    ok(!/[IO01]/.test(c), "keine verwechselbaren Zeichen: " + c);
+    codes.add(c);
+  }
+  ok(codes.size > 190, "und sie wiederholen sich nicht: " + codes.size + "/200");
+});
+
+t("Eine lokale Aenderung geht ans zweite Handy", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const vorher = ctx.gesendet.length;
+  D.applyDart(3, 20);
+  ok(ctx.gesendet.length > vorher, "ein Wurf wird gefunkt");
+  const letzte = ctx.gesendet[ctx.gesendet.length - 1];
+  ok(/darts-abc123/.test(letzte.url), "in den richtigen Raum: " + letzte.url);
+  eq(letzte.body.match.players[0].score, 441, "mit dem neuen Stand");
+});
+
+t("Was vom anderen Handy kommt, wird uebernommen", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 301;
+  ctx.rein({ v: 1, uhr: 999, von: "ANDERES", match: fremd });
+  eq(D.getMatch().players[0].score, 301, "der fremde Stand gilt");
+});
+
+t("Das eigene Echo wird nicht noch einmal eingespielt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  const stand = D.getMatch().players[0].score;
+  const eigenes = ctx.gesendet[ctx.gesendet.length - 1].body;
+  eq(D.syncUebernehmen(eigenes), "eigenes", "ntfy schickt jedem auch die eigene Nachricht");
+  eq(D.getMatch().players[0].score, stand, "und sie darf nichts veraendern");
+});
+
+t("Ein alter Stand ueberschreibt keinen neuen", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20); D.applyDart(3, 20);          // Uhr laeuft hoch
+  const jetzt = D.getMatch().players[0].score;
+  const alt = JSON.parse(JSON.stringify(D.getMatch()));
+  alt.players[0].score = 501;
+  eq(D.syncUebernehmen({ v: 1, uhr: 1, von: "ANDERES", match: alt }), "aelter");
+  eq(D.getMatch().players[0].score, jetzt, "der neuere Stand bleibt");
+});
+
+t("Bei Gleichstand entscheiden beide Seiten GLEICH", () => {
+  // Sonst uebernehmen beide den jeweils anderen Stand und tauschen ewig weiter.
+  const a = syncBoot(), b = syncBoot();
+  a.D.setSyncGeraet("AAAA"); b.D.setSyncGeraet("ZZZZ");
+  a.D.syncOeffnen("R"); b.D.syncOeffnen("R");
+  a.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  a.D.setSyncUhr(5); b.D.setSyncUhr(5);
+  const mA = JSON.parse(JSON.stringify(a.D.getMatch())); mA.players[0].score = 111;
+  const mB = JSON.parse(JSON.stringify(b.D.getMatch())); mB.players[0].score = 222;
+  const beiA = a.D.syncUebernehmen({ v: 1, uhr: 5, von: "ZZZZ", match: mB });
+  const beiB = b.D.syncUebernehmen({ v: 1, uhr: 5, von: "AAAA", match: mA });
+  ok((beiA === "uebernommen") !== (beiB === "uebernommen"),
+     "genau eine Seite gibt nach: A=" + beiA + " B=" + beiB);
+});
+
+t("Der Empfang funkt nicht zurueck", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const vorher = ctx.gesendet.length;
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 301;
+  ctx.rein({ v: 1, uhr: 500, von: "ANDERES", match: fremd });
+  eq(ctx.gesendet.length, vorher,
+     "sonst schaukelt sich das zwischen zwei Handys endlos auf");
+});
+
+t("Muell aus dem Netz bringt nichts durcheinander", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const stand = D.getMatch().players[0].score;
+  [null, {}, { v: 2 }, { v: 1, uhr: "x" }, "text", { v: 1, uhr: 9, von: "X", match: null }]
+    .forEach(m => { try { D.syncUebernehmen(m); } catch (e) { ok(false, "Absturz bei " + JSON.stringify(m) + ": " + e.message); } });
+  ok(true, "kein Absturz");
+  // Der letzte Fall ist gueltig (Spiel beendet), die anderen duerfen nichts tun
+  eq(typeof D.getMatch(), "object");
+  ok(D.getMatch() === null || D.getMatch().players[0].score === stand);
+});
+
+t("Eine Aenderung ohne save() geht beim naechsten Rendern raus", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  // Nur ZWEI Darts: nach dem dritten beendet die App die Aufnahme selbst,
+  // ein endTurn() danach waere das zweite und wechselte wieder zurueck.
+  D.applyDart(3, 20); D.applyDart(1, 20);
+  const n = ctx.gesendet.length;
+  // endTurn() allein rief kein save() - gemessen zwischen zwei echten Geraeten:
+  // der Tisch blieb auf [431,501,0,2], das Board stand auf [431,501,1,0].
+  D.endTurn();
+  D.render();
+  ok(ctx.gesendet.length > n, "das Rendern reicht den Stand nach");
+  const letzte = ctx.gesendet[ctx.gesendet.length - 1].body;
+  eq(letzte.match.currentIdx, 1, "und zwar den richtigen");
+  eq(letzte.match.currentTurn.length, 0);
+});
+
+t("Nachfassen sendet nicht doppelt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  const n = ctx.gesendet.length;
+  D.render(); D.render(); D.render();
+  eq(ctx.gesendet.length, n, "ohne Aenderung geht nichts raus");
+});
+
+t("Ein beitretendes Handy loescht die laufende Runde NICHT", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  D.syncOeffnen("ABC123");
+  // Genau das kam vom zweiten Handy, das noch kein Spiel hatte. Gemessen zwischen
+  // zwei echten Geraeten: danach stand auf BEIDEN match:null, das Spiel war weg.
+  eq(D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: null }), "leer");
+  ok(D.getMatch(), "die Runde laeuft weiter");
+  eq(D.getMatch().players[0].score, 441);
+});
+
+t("Wer selbst nichts hat, funkt auch nichts", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");          // kein Spiel offen
+  D.render(); D.render();
+  eq(ctx.gesendet.length, 0, "sonst loescht das Beitreten die fremde Runde");
+});
+
+t("Ein leerer Stand gilt, wenn selbst nichts laeuft", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  // Kein laufendes Spiel: dann ist an einem leeren Paket auch nichts kaputt.
+  const r = D.syncUebernehmen({ v: 1, uhr: 5, von: "ANDERES", match: null });
+  ok(r === "uebernommen" || r === "leer", "kein Absturz, klare Antwort: " + r);
+});
+
+t("Ohne Raum wird nichts gefunkt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  eq(ctx.gesendet.length, 0, "wer nicht verbunden ist, schickt auch nichts");
+});
+
+t("Verlassen macht die Leitung wirklich zu", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  eq(D.syncAn(), true);
+  D.syncSchliessen();
+  eq(D.syncAn(), false);
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const n = ctx.gesendet.length;
+  D.applyDart(3, 20);
+  eq(ctx.gesendet.length, n, "danach geht nichts mehr raus");
+});
+
 t("parseSpeech: Kommandos und Bull", () => {
   const { D } = boot();
   eq(D.parseSpeech("zurück", []).cmd, "undo");
@@ -1399,6 +1610,17 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
     w.D.applySpokenResult(w.D.parseSpeech("20 20 20", []), "…");
     w.D.setView("game"); w.D.render();
     (w.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+      .forEach(x => angeboten.add(x.slice(10, -1)));
+  }
+
+  // Der Trenn-Knopf erscheint nur, wenn ein zweites Handy verbunden IST.
+  {
+    const v = boot();
+    v.D.setSyncTransport(() => Promise.resolve({ ok: true }),
+      function (u) { this.close = () => {}; });
+    v.D.syncOeffnen("ABC123");
+    v.D.setView("settings"); v.D.render();
+    (v.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
       .forEach(x => angeboten.add(x.slice(10, -1)));
   }
 
