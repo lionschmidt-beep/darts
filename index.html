@@ -301,12 +301,13 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.25";
+var VER    = "1.26";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
-           tts:true, keepHistory:true, meId:"lion", inputMode:"single", platzSpiel:true };
+           tts:true, keepHistory:true, meId:"lion", inputMode:"single", platzSpiel:true,
+           nurMitName:false };
 }
 function defaultState(){
   return {
@@ -1766,6 +1767,9 @@ function renderSettings(){
              "Wer ausgemacht hat, ist durch &ndash; die anderen spielen den Rest aus")
 
     + '<label class="lbl" style="margin-top:16px">Sprache</label>'
+    + toggle("s_name", !!st.nurMitName, "Bei Musik: Name muss dabei sein",
+             "Dann zählt nur „Arne Triple 20“ &ndash; ein Songtext sagt nie deinen Namen")
+    + '<div style="height:8px"></div>'
     + toggle("s_tts", !!st.tts, "Aufnahme laut ansagen",
              "Nach jeder Aufnahme: Punkte und Rest &middot; im Spiel auch über das Lautsprecher-Symbol")
 
@@ -2273,14 +2277,17 @@ function ensureRecog(){
     var res = ev.results[ev.results.length-1];
     if(!res.isFinal) return;
     var names = currentNames();
-    var best=null, bestTxt="";
-    for(var i=0;i<res.length;i++){                        // beste Alternative nehmen, die parsebar ist
-      var t=(res[i]&&res[i].transcript)||"";
-      var p=parseSpeech(t, names);
-      if(!best || p.throws.length>best.throws.length){ best=p; bestTxt=t; }
-      if(best && best.throws.length>=1) break;
+    // Erste Alternative nehmen, die WIE EINE ANSAGE KLINGT - nicht die erste,
+    // in der zufaellig eine Zahl steckt. Mit Musik im Raum ist das der
+    // Unterschied zwischen "Wurf eingetragen" und "Refrain eingetragen".
+    var liste = [];
+    for(var i=0;i<res.length;i++){
+      liste.push({ text:(res[i]&&res[i].transcript)||"",
+                   confidence:(res[i]&&typeof res[i].confidence==="number")?res[i].confidence:0 });
     }
-    if(best) applySpokenResult(best, bestTxt);
+    var w = besteAlternative(liste);
+    if(w.p){ ueberhoert = 0; applySpokenResult(w.p, w.text); }
+    else ansageVerworfen(w.text);
   };
   recog.onerror = function(ev){
     if(ev.error==="not-allowed" || ev.error==="service-not-allowed"){
@@ -2323,6 +2330,82 @@ function updateVoiceStatus(msg){
   if(!SR){ el.innerHTML='<span class="muted">Von diesem Browser nicht unterstützt – bitte Chrome (Android).</span>'; return; }
   if(!voiceOn){ el.innerHTML='<span class="muted">Mikro aus.</span>'+(voiceMsg?' '+voiceMsg:''); return; }
   el.innerHTML='<span style="color:var(--green)">&#9679; hört zu …</span>'+(voiceMsg?' &nbsp;'+voiceMsg:'');
+}
+
+// ---------------------------------------------------------------------------
+// Musik im Hintergrund
+//
+// Die Web Speech API liefert nur fertigen Text, nie das Audiosignal - "Musik
+// ausblenden" ist damit technisch ausgeschlossen. Was geht: prüfen, ob das, was
+// ankam, überhaupt nach einer Darts-Ansage klingt.
+//
+// Bis 1.25 nahm onresult die erste Alternative, die IRGENDEINEN Wurf enthielt.
+// Ein einzelnes "zwanzig" im Refrain reichte, um eine 20 einzutragen.
+// ---------------------------------------------------------------------------
+
+// Gehoert dieses Wort zu einer Wurf-Ansage?
+function istWurfWort(w){
+  if(/^\d+$/.test(w)) return true;
+  if(ZAHLWORT.hasOwnProperty(w)) return true;
+  if(multWord(w)) return true;
+  if(/^(bull|bulls|bullseye|bulle|bullsauge)$/.test(w)) return true;
+  if(/^(daneben|vorbei|verfehlt|nix|nichts|miss|fehlwurf)$/.test(w)) return true;
+  if(/^(und|mal|punkte|rest|aus)$/.test(w)) return true;      // harmlose Fuellwoerter
+  return false;
+}
+
+// Klingt das nach einer Ansage - oder nach einem Songtext, in dem zufaellig
+// eine Zahl vorkam? sicherheit ist der confidence-Wert des Browsers; 0 oder
+// undefined heisst "keine Angabe" und darf deshalb NICHT zur Ablehnung führen.
+function ansageBrauchbar(p, rohtext, sicherheit){
+  if(p && p.cmd) return true;                    // Kommandos sind kurz und eindeutig
+  if(!p || !p.throws.length) return false;
+
+  if(typeof sicherheit === "number" && sicherheit > 0 && sicherheit < 0.45) return false;
+
+  var s = String(rohtext||"").toLowerCase().replace(/[.,;:!?]/g," ").replace(/-/g," ").trim();
+  var woerter = s.split(/\s+/).filter(Boolean);
+  if(woerter.length <= 4) return true;            // "Triple 20, 20, Doppel 5" ist kurz
+
+  var treffer = 0;
+  for(var i=0;i<woerter.length;i++) if(istWurfWort(woerter[i])) treffer++;
+  return (treffer / woerter.length) >= 0.5;
+}
+
+// Aus den Alternativen des Browsers die erste nehmen, die WIE EINE ANSAGE
+// KLINGT - nicht die erste, in der zufaellig eine Zahl steckt.
+// alternativen: [{text, confidence}]
+function besteAlternative(alternativen){
+  var names = currentNames(), ersterMitWurf = "";
+  for(var i=0;i<alternativen.length;i++){
+    var a = alternativen[i] || {};
+    var t = a.text || "";
+    var p = parseSpeech(t, names);
+    if(ansageBrauchbar(p, t, a.confidence)) return { p:p, text:t };
+    if(!ersterMitWurf && p.throws.length) ersterMitWurf = t;
+  }
+  return { p:null, text: ersterMitWurf || ((alternativen[0]||{}).text || "") };
+}
+
+// Eintrittspunkt fuer alles Gehoerte - eine Stelle, damit sie pruefbar ist.
+var ueberhoert = 0;   // wie oft in Folge etwas verworfen wurde
+
+function ansageVerworfen(text){
+  ueberhoert++;
+  updateVoiceStatus('&#128266; überhört: „'+esc(String(text).slice(0,48))+'“'
+    + ' <span class="muted">(klang nicht nach einer Ansage)</span>'
+    + (ueberhoert>=3 && !state.settings.nurMitName
+       ? '<br><b>Viel Hintergrund?</b> Schalte in den Einstellungen '
+         + '„Name muss dabei sein" ein &ndash; dann zählt nur, was deinen Namen nennt.'
+       : ''));
+}
+
+function hoerEreignis(text, sicherheit){
+  var p = parseSpeech(text, currentNames());
+  if(!ansageBrauchbar(p, text, sicherheit)){ ansageVerworfen(text); return false; }
+  ueberhoert = 0;                    // wieder verstanden - Zaehler zurueck
+  applySpokenResult(p, text);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2488,6 +2571,13 @@ function applySpokenResultInner(p, rawTxt){
     say("Nicht verstanden"); return;
   }
   var cur = m.players[m.currentIdx];
+  // Musik im Raum: wer das anschaltet, muss den Werfer nennen. Ein Refrain sagt
+  // nie "Arne". Kommandos sind ausgenommen, sonst kaeme man aus dem Dialog nicht raus.
+  if(state.settings.nurMitName && !p.name){
+    updateVoiceStatus('&#9888;&#65039; Ohne Namen nicht eingetragen &ndash; sag z.B. „<b>'
+      + esc(cur.name)+'</b> Triple 20".');
+    return;
+  }
   if(p.name && !nameMatches(p.name, cur.name)){          // vor falschem Spieler schuetzen
     updateVoiceStatus('&#9888;&#65039; „'+esc(p.name)+'“ gesagt, aber <b>'+esc(cur.name)+'</b> ist dran – nichts eingetragen.');
     say(cur.name+" ist dran, nicht "+p.name);
@@ -2680,6 +2770,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="s_bo"){ state.settings.bestOf=parseInt(t.getAttribute("data-v"),10); save(); render(); return; }
   if(act==="s_di"){ state.settings.doubleIn=!state.settings.doubleIn; save(); render(); return; }
   if(act==="s_platz"){ state.settings.platzSpiel=!(state.settings.platzSpiel!==false); save(); render(); return; }
+  if(act==="s_name"){ state.settings.nurMitName=!state.settings.nurMitName; save(); render(); return; }
   if(act==="s_tts"){ state.settings.tts=!state.settings.tts; ttsOn=!!state.settings.tts; save(); render(); return; }
   if(act==="s_hist"){ state.settings.keepHistory=!(state.settings.keepHistory!==false); save(); render(); return; }
   if(act==="s_export"){
@@ -2858,6 +2949,9 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
   setSR:function(x){ SR=x; recog=null; }, nameOf:nameOf, idBelegt:idBelegt,
   setVoiceOn:function(v){ voiceOn=!!v; }, wartetAufOk:wartetAufOk,
+  ansageBrauchbar:ansageBrauchbar, hoerEreignis:hoerEreignis, istWurfWort:istWurfWort,
+  besteAlternative:besteAlternative, ueberhoertZahl:function(){ return ueberhoert; },
+  getRecog:function(){ return recog; }, ensureRecog:ensureRecog,
   applyTurnSum:applyTurnSum, sumMode:sumMode,
   reload:function(){ state=load(); view=restoreView(); },
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,

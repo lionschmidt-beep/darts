@@ -3334,6 +3334,287 @@ t("Zwei Wuerfe ansagen, dann der dritte - erst danach wird vorgelesen", () => {
   eq(D.getMatch().currentIdx, 0);
 });
 
+// ================================================================ Musik im Hintergrund
+// Die Web Speech API liefert nur fertigen Text, kein Audio - "Musik ausblenden"
+// geht technisch nicht. Was geht: die Erkennung so streng machen, dass
+// Songtext-Fetzen nicht mehr als Wuerfe durchgehen.
+//
+// Bisher nahm onresult die erste Alternative, die IRGENDEINEN Wurf enthielt.
+// Ein einzelnes "zwanzig" im Refrain reichte.
+
+t("Ein Songtext-Fetzen wird nicht als Wurf eingetragen", () => {
+  const { D } = boot();
+  const muell = [
+    "tausend mal berührt und tausend mal ist nichts passiert",
+    "und dann hat es zwanzig mal gebumm gemacht in meinem herzen",
+    "ich hab die nacht durchgemacht und dabei fünf gläser getrunken",
+    "sie liebten sich zwanzig jahre lang und keiner hat es je gemerkt",
+    "das war der schönste tag in meinem ganzen leben sagte er",
+  ];
+  muell.forEach(t2 => {
+    const p = D.parseSpeech(t2, []);
+    ok(!D.ansageBrauchbar(p, t2),
+       "sollte verworfen werden: '" + t2 + "' -> " + p.throws.map(x => x.label).join(","));
+  });
+});
+
+t("Eine echte Ansage kommt durch", () => {
+  const { D } = boot();
+  const echt = [
+    "triple 20 20 doppel 5",
+    "triple zwanzig zwanzig doppel fünf",
+    "60 20 5",
+    "doppel 16",
+    "bull",
+    "daneben daneben daneben",
+    "zwanzig",
+    "triple 20",
+  ];
+  echt.forEach(t2 => {
+    const p = D.parseSpeech(t2, []);
+    ok(D.ansageBrauchbar(p, t2), "sollte durchkommen: '" + t2 + "'");
+  });
+});
+
+t("Kommandos kommen auch als kurzer Satz durch", () => {
+  const { D } = boot();
+  ["okay", "passt", "weiter", "zurück", "20 raus", "stopp"].forEach(t2 => {
+    const p = D.parseSpeech(t2, []);
+    ok(D.ansageBrauchbar(p, t2), "Kommando '" + t2 + "' darf nicht gefiltert werden");
+  });
+});
+
+t("Mit Namenspflicht kommt nur durch, was den Werfer nennt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.nurMitName = true;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+
+  // Ohne Namen: nichts passiert
+  D.applySpokenResult(D.parseSpeech("triple 20", ["lion", "arne"]), "triple 20");
+  eq(D.getMatch().players[0].darts, 0, "ohne Namen wird nichts eingetragen");
+
+  // Mit Namen: zaehlt
+  D.applySpokenResult(D.parseSpeech("lion triple 20", ["lion", "arne"]), "lion triple 20");
+  eq(D.getMatch().players[0].darts, 1, "mit Namen schon");
+  eq(D.getMatch().players[0].score, 441);
+});
+
+t("Ohne Namenspflicht bleibt alles wie bisher", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  eq(D.getSettings().nurMitName, false, "im Auslieferungszustand aus");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("triple 20", ["lion", "arne"]), "triple 20");
+  eq(D.getMatch().players[0].darts, 1, "ohne Namen eingetragen");
+});
+
+t("Die Namenspflicht gilt nicht fuer Kommandos", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.getState().settings.nurMitName = true;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("lion 20 20 20", ["lion", "arne"]), "lion 20 20 20");
+  eq(D.getMatch().currentTurn.length, 3, "drei Darts drin");
+  // "okay" ohne Namen muss trotzdem weiterreichen
+  D.applySpokenResult(D.parseSpeech("okay", ["lion", "arne"]), "okay");
+  eq(D.getMatch().currentIdx, 1, "sonst kaeme man aus dem Dialog nicht raus");
+});
+
+t("Eine unsichere Erkennung wird verworfen", () => {
+  const { D } = boot();
+  const p = D.parseSpeech("triple 20", []);
+  ok(D.ansageBrauchbar(p, "triple 20", 0.9), "hohe Sicherheit: durch");
+  ok(!D.ansageBrauchbar(p, "triple 20", 0.2), "niedrige Sicherheit: verworfen");
+  ok(D.ansageBrauchbar(p, "triple 20", 0), "ohne Angabe (0) nicht ablehnen - viele Browser liefern nichts");
+  ok(D.ansageBrauchbar(p, "triple 20", undefined), "und undefined genauso");
+});
+
+t("Der Schalter steht in den Einstellungen", () => {
+  const ctx = boot();
+  ctx.D.setView("settings"); ctx.D.render();
+  ok(ctx.has("s_name"), "es gibt einen Schalter dafuer");
+  ok(/Musik|Name/i.test(ctx.app.innerHTML), "und er erklaert sich");
+  ctx.click("s_name");
+  eq(ctx.D.getSettings().nurMitName, true, "und wirkt");
+});
+
+t("Verworfenes wird gemeldet, nicht verschluckt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+  D.hoerEreignis("und dann hat es zwanzig mal gebumm gemacht in meinem herzen", 0.9);
+  eq(D.getMatch().players[0].darts, 0, "nichts eingetragen");
+  const status = ctx.els.voiceStatus.innerHTML || "";
+  ok(/überhört/i.test(status),
+     "der Nutzer sieht, dass etwas ankam und verworfen wurde: '" + status + "'");
+  ok(/gebumm|zwanzig mal/i.test(status), "samt dem, was verstanden wurde");
+});
+
+t("Unter den Alternativen gewinnt die, die nach einer Ansage klingt", () => {
+  const { D } = boot();
+  // So liefert Chrome das: mehrere Deutungen desselben Geraeusches, absteigend
+  // nach Wahrscheinlichkeit. Die erste ist bei Musik oft Unsinn mit einer Zahl.
+  const w = D.besteAlternative([
+    { text: "und dann hat es zwanzig mal gebumm gemacht in meinem herzen", confidence: 0.8 },
+    { text: "triple zwanzig zwanzig doppel fünf", confidence: 0.7 },
+  ]);
+  ok(w.p, "eine Alternative wurde genommen");
+  eq(w.text, "triple zwanzig zwanzig doppel fünf", "und zwar die zweite");
+  eq(w.p.throws.map(x => x.label), ["T20", "20", "D5"]);
+});
+
+t("Klingt keine Alternative nach einer Ansage, wird nichts eingetragen", () => {
+  const { D } = boot();
+  const w = D.besteAlternative([
+    { text: "sie liebten sich zwanzig jahre lang und keiner hat es je gemerkt", confidence: 0.9 },
+    { text: "sie liebten sich zwanzig jahre lang und keiner hat es je bemerkt", confidence: 0.6 },
+  ]);
+  eq(w.p, null, "keine brauchbare Deutung");
+  ok(w.text.length > 0, "aber der Text bleibt fuer die Meldung erhalten");
+});
+
+t("Die erste Alternative gewinnt, wenn sie passt", () => {
+  const { D } = boot();
+  const w = D.besteAlternative([
+    { text: "triple 20", confidence: 0.95 },
+    { text: "triple 21", confidence: 0.4 },
+  ]);
+  eq(w.text, "triple 20");
+});
+
+t("Eine leere Antwort wirft nicht", () => {
+  const { D } = boot();
+  let err = null;
+  try {
+    eq(D.besteAlternative([]).p, null);
+    eq(D.besteAlternative([{}]).p, null);
+    eq(D.besteAlternative([{ text: "" }]).p, null);
+  } catch (e) { err = e.message; }
+  eq(err, null, "kein Absturz bei leerem Ergebnis: " + err);
+});
+
+t("Nach mehrfachem Ueberhoeren kommt der Tipp mit dem Namens-Schalter", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+  const muell = "und dann hat es zwanzig mal gebumm gemacht in meinem herzen";
+  D.hoerEreignis(muell, 0.9);
+  D.hoerEreignis(muell, 0.9);
+  ok(!/Name muss dabei sein/.test(ctx.els.voiceStatus.innerHTML || ""),
+     "nach zweimal noch kein Tipp");
+  D.hoerEreignis(muell, 0.9);
+  ok(/Name muss dabei sein/.test(ctx.els.voiceStatus.innerHTML || ""),
+     "nach dreimal schon: " + (ctx.els.voiceStatus.innerHTML || ""));
+  eq(D.ueberhoertZahl(), 3);
+});
+
+t("Mit eingeschaltetem Namens-Modus kommt der Tipp nicht mehr", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
+  D.getState().settings.nurMitName = true;
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+  const muell = "sie liebten sich zwanzig jahre lang und keiner hat es je gemerkt";
+  for (let i = 0; i < 4; i++) D.hoerEreignis(muell, 0.9);
+  ok(!/Name muss dabei sein/.test(ctx.els.voiceStatus.innerHTML || ""),
+     "der Tipp waere sinnlos, der Schalter ist ja schon an");
+});
+
+t("Der Zaehler geht zurueck, sobald wieder etwas verstanden wurde", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start=function(){}; this.abort=function(){}; });
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+  const muell = "und dann hat es zwanzig mal gebumm gemacht in meinem herzen";
+  D.hoerEreignis(muell, 0.9);
+  D.hoerEreignis(muell, 0.9);
+  eq(D.ueberhoertZahl(), 2);
+  D.hoerEreignis("triple 20", 0.9);
+  eq(D.ueberhoertZahl(), 0, "sonst kaeme der Tipp irgendwann grundlos");
+  eq(D.getMatch().players[0].darts, 1, "und der Wurf zaehlt");
+});
+
+t("Was der Browser wirklich liefert, geht durch den Filter", () => {
+  // onresult ist die Stelle, an der die echte Erkennung ankommt - sie liess
+  // sich bisher nur im Browser pruefen und war deshalb ungetestet.
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start = function(){}; this.abort = function(){}; });
+  D.ensureRecog();
+  const r = D.getRecog();
+  ok(r && typeof r.onresult === "function", "der Erkenner ist verdrahtet");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+
+  // So sieht ein echtes Ereignis aus: mehrere Deutungen, absteigend sortiert.
+  const ereignis = (alternativen) => {
+    const res = alternativen.map(a => ({ transcript: a[0], confidence: a[1] }));
+    res.isFinal = true;
+    res.length = alternativen.length;
+    return { results: Object.assign([res], { length: 1 }) };
+  };
+
+  r.onresult(ereignis([
+    ["und dann hat es zwanzig mal gebumm gemacht in meinem herzen", 0.82],
+    ["triple zwanzig zwanzig doppel fünf", 0.61],
+  ]));
+  const p = D.getMatch().players[0];
+  eq(p.darts, 3, "die zweite Deutung wurde genommen, nicht die erste");
+  eq(p.score, 411, "501 - 60 - 20 - 10");
+});
+
+t("Eine unsicher erkannte Deutung wird uebersprungen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start = function(){}; this.abort = function(){}; });
+  D.ensureRecog();
+  const r = D.getRecog();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+  // Beide klingen nach einer Ansage - aber die erste hat der Browser selbst
+  // als unsicher markiert. Genau das passiert, wenn Musik reinspielt.
+  const res = [
+    { transcript: "triple 20", confidence: 0.2 },
+    { transcript: "doppel 5", confidence: 0.88 },
+  ];
+  res.isFinal = true; res.length = 2;
+  r.onresult({ results: Object.assign([res], { length: 1 }) });
+  eq(D.getMatch().players[0].score, 491, "die sichere Deutung zaehlt: 501-10");
+  eq(D.getMatch().currentTurn.map(d => d.label), ["D5"]);
+});
+
+t("Klingt keine Deutung nach einer Ansage, traegt onresult nichts ein", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function(){ this.start = function(){}; this.abort = function(){}; });
+  D.ensureRecog();
+  const r = D.getRecog();
+  D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setView("game"); D.render();
+  const res = [{ transcript: "sie liebten sich zwanzig jahre lang und keiner hat es gemerkt", confidence: 0.9 }];
+  res.isFinal = true; res.length = 1;
+  r.onresult({ results: Object.assign([res], { length: 1 }) });
+  eq(D.getMatch().players[0].darts, 0, "nichts eingetragen");
+  ok(/überhört/i.test(ctx.els.voiceStatus.innerHTML || ""), "aber gemeldet");
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");
