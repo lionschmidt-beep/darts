@@ -832,6 +832,122 @@ t("Ein leerer Stand gilt, wenn selbst nichts laeuft", () => {
   ok(r === "uebernommen" || r === "leer", "kein Absturz, klare Antwort: " + r);
 });
 
+t("Der Verbindungsstand wird gemessen, nicht mitgeschrieben", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  let es = null;
+  function FakeES(url){ this.readyState = 0; this.url = url; es = this;
+    this.close = function(){ this.readyState = 2; }; }
+  D.setSyncTransport(() => Promise.resolve({ok:true}), FakeES);
+  D.syncOeffnen("ABC123");
+  eq(D.syncStand().status, "verbinde", "readyState 0 = verbindet noch");
+  es.readyState = 1;
+  eq(D.syncStand().status, "offen", "readyState 1 = offen");
+  es.readyState = 2;
+  eq(D.syncStand().status, "fehler", "readyState 2 = zu");
+  // Und der Weg zurueck - genau der fehlte: gemessen blieb der Status nach einem
+  // Netzabbruch auf "fehler" stehen, obwohl der Empfang laengst wieder lief.
+  es.readyState = 1;
+  eq(D.syncStand().status, "offen", "nach dem Wiederverbinden wieder offen");
+});
+
+t("Ein offenes Geraet ohne Netz meldet sich als getrennt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  function FakeES(u){ this.readyState = 1; this.close = function(){}; }
+  D.setSyncTransport(() => Promise.resolve({ok:true}), FakeES);
+  D.syncOeffnen("ABC123");
+  eq(D.syncLage(), "offen");
+  // Gemessen: readyState blieb 1, waehrend das Geraet offline war - die Anzeige
+  // sagte "verbunden", obwohl nichts mehr ankam.
+  const alt = ctx.win.navigator ? ctx.win.navigator.onLine : undefined;
+  if (!ctx.win.navigator) ctx.win.navigator = {};
+  ctx.win.navigator.onLine = false;
+  eq(D.syncLage(), "fehler", "kein Netz ist kein 'verbunden'");
+  ctx.win.navigator.onLine = true;
+  eq(D.syncLage(), "offen", "und zurueck");
+  if (alt !== undefined) ctx.win.navigator.onLine = alt;
+});
+
+t("Im Spiel sieht man, ob das zweite Handy dranhaengt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  let es = null;
+  function FakeES(u){ this.readyState = 1; es = this; this.close = function(){ this.readyState = 2; }; }
+  D.setSyncTransport(() => Promise.resolve({ok:true}), FakeES);
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(!/syncpille/.test(ctx.app.innerHTML), "ohne Sync keine Anzeige");
+  D.syncOeffnen("ABC123");
+  D.setView("game"); D.render();
+  ok(/syncpille/.test(ctx.app.innerHTML), "mit Sync eine Anzeige");
+  ok(/ABC123/.test(ctx.app.innerHTML), "mit dem Raumcode: " +
+     (ctx.app.innerHTML.match(/syncpille[^>]*>([^<]*)/) || [])[1]);
+  es.readyState = 2;
+  D.render();
+  ok(/syncpille aus|weg|getrennt/i.test(ctx.app.innerHTML),
+     "und wenn die Leitung weg ist, steht das da");
+});
+
+t("Ein ueberschriebener eigener Wurf wird gemeldet", async () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABC123");
+  D.applyDart(3, 20);                       // geht raus, ist gesendet
+  await null;                               // der Sendeerfolg kommt als Microtask
+  // Jetzt bricht das Netz ab: der Wurf wird lokal gebucht, geht aber nicht raus.
+  D.setSyncTransport(() => Promise.reject(new Error("offline")), null);
+  D.applyDart(1, 5);
+  await null; await null;                   // Fehlschlag zustellen lassen
+  D.setView("game"); D.render();
+  ok(!/überschrieben|verworfen/i.test(ctx.app.innerHTML), "solange nichts kommt, ist alles gut");
+  // Und dann kommt der Stand vom anderen Handy, das die 5 nie gesehen hat.
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 440; fremd.currentTurn = [];
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  D.setView("game"); D.render();
+  ok(/überschrieben|dein.*Stand|anderen Handy/i.test(ctx.app.innerHTML),
+     "gemessen: die offline geworfene 5 war spurlos weg. Das muss dastehen.");
+  ok(/syncpille/.test(ctx.app.innerHTML),
+     "und die Verbindungsanzeige bleibt daneben stehen - gerade JETZT will man sie sehen");
+  eq(D.getMatch().players[0].score, 440, "der fremde Stand gilt trotzdem - er ist neuer");
+});
+
+t("Die Meldung verschwindet, sobald man weiterspielt", async () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABC123");
+  D.applyDart(3, 20);
+  await null;
+  D.setSyncTransport(() => Promise.reject(new Error("offline")), null);
+  D.applyDart(1, 5);
+  await null; await null;
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 440; fremd.currentTurn = [];
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  D.setSyncTransport(() => Promise.resolve({ok:true}), null);
+  D.applyDart(1, 1);
+  D.setView("game"); D.render();
+  ok(!/überschrieben/i.test(ctx.app.innerHTML), "sonst steht sie den ganzen Abend da");
+});
+
+t("Nach dem Empfang wird nichts zurueckgefunkt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABC123");
+  D.applyDart(3, 20);
+  const n = ctx.gesendet.length;
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 301;
+  D.syncUebernehmen({ v: 1, uhr: 500, von: "ANDERES", match: fremd });
+  D.render(); D.render();
+  eq(ctx.gesendet.length, n,
+     "sonst schickt render() den empfangenen Stand mit hoeherer Uhr zurueck");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
