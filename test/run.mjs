@@ -933,6 +933,38 @@ t("Die Meldung verschwindet, sobald man weiterspielt", async () => {
   ok(!/überschrieben/i.test(ctx.app.innerHTML), "sonst steht sie den ganzen Abend da");
 });
 
+t("Wer den Gleichstand verliert, erfaehrt davon", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSyncGeraet("AAAA");                  // bei Gleichstand gewinnt die groessere Kennung
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABC123");
+  D.applyDart(1, 20);                       // ging raus, Uhr steht auf 2
+  const uhr = D.syncStand().uhr;
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 496; fremd.currentTurn = [];
+  // Gleiche Uhr = beide haben gleichzeitig geworfen. Der eigene Wurf ging raus,
+  // wird aber ueberschrieben - gemessen an zwei echten Geraeten passierte das
+  // lautlos.
+  eq(D.syncUebernehmen({ v: 1, uhr: uhr, von: "ZZZZ", match: fremd }), "uebernommen");
+  D.setView("game"); D.render();
+  ok(/überschrieben/i.test(ctx.app.innerHTML), "der verlorene Wurf muss auffallen");
+});
+
+t("Ein normaler neuerer Stand loest keine Warnung aus", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABC123");
+  D.applyDart(1, 20);
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 470;
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  D.setView("game"); D.render();
+  ok(!/überschrieben/i.test(ctx.app.innerHTML),
+     "sonst warnt sie bei jedem normalen Wurf des anderen Handys");
+});
+
 t("Nach dem Empfang wird nichts zurueckgefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;

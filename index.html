@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.33";
+var VER    = "1.34";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -546,6 +546,11 @@ function syncUebernehmen(paket){
   if(!paket.match && state.match && !state.match.finished) return "leer";
   if(paket.uhr < syncUhr) return "aelter";
   if(paket.uhr === syncUhr && paket.von < syncGeraeteId()) return "gleichstand";
+  // Gleiche Uhr heisst: beide haben zur selben Zeit etwas eingetragen. Wer hier
+  // ankommt, hat den Vergleich verloren - sein Wurf ging zwar raus, wird aber
+  // gleich ueberschrieben. Gemessen bei gleichzeitigem Werfen an zwei Geraeten:
+  // der Stand konvergiert sauber, aber ein Wurf verschwand ohne ein Wort.
+  if(paket.uhr === syncUhr) syncVerworfen = true;
   // Hatte dieses Handy Wuerfe, die nie rausgingen? Dann sind sie jetzt weg -
   // gemessen bei einem Netzabbruch: der offline geworfene Dart war spurlos
   // verschwunden, und nichts hat es gesagt. Der fremde Stand gilt trotzdem
