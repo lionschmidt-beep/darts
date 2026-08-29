@@ -297,7 +297,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.23";
+var VER    = "1.24";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -2357,6 +2357,7 @@ function applySpokenResultInner(p, rawTxt){
     applied.push(th);
     if(r==="win"){ event="win"; break; }
     if(r==="leg"){ event="leg"; break; }
+    if(r==="platz"){ event="platz"; break; }
     if(r==="bust"){ event="bust"; break; }
     if(r==="nostart"){ nichtGezaehlt.push(th.label); continue; }
     if(state.match && state.match.currentIdx!==idxBefore){ event="full"; break; }
@@ -2364,6 +2365,15 @@ function applySpokenResultInner(p, rawTxt){
   var labels = applied.map(function(a){return a.label;}).join(" ");
   var spoken = applied.map(function(a){return a.say;}).join(", ");
   if(event==="win"){ say("Spiel! "+cur.name+" gewinnt."); return; }
+  if(event==="platz"){
+    var offen2 = m.players.filter(function(q){ return m.platz.indexOf(q.id)<0; });
+    var naechster = offen2[0];
+    updateVoiceStatus('&#127942; <b>'+esc(cur.name)+'</b> ist durch &middot; weiter um Platz '
+      + (m.platz.length+1) + (naechster ? ' &middot; '+esc(naechster.name)+' ist dran' : ''));
+    say(cur.name + " ist durch. Weiter geht es um Platz " + (m.platz.length+1) + ". "
+        + (naechster ? naechster.name + " ist dran." : ""));
+    return;
+  }
   if(event==="leg"){
     var lw = m.legs[m.legs.length-1];
     updateVoiceStatus('&#127919; Leg an <b>'+esc(cur.name)+'</b> ('+(lw?lw.darts:0)+' Darts) &middot; sag „weiter“');

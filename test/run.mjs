@@ -3135,6 +3135,21 @@ t("Der Service Worker cacht die App-Icons mit", () => {
   ok(m.icons.length >= 3, "und es gibt genug Icons");
 });
 
+t("Der Sprachmodus sagt an, wenn jemand durch ist", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("doppel 20", []), "doppel 20");
+  const gesagt = ctx.gesagt.join(" ");
+  ok(/durch|Platz/i.test(gesagt),
+     "im Bike-Modus liegt das Handy weg - man muss hoeren, dass es weitergeht. War: " + gesagt);
+  ok(!/Rest 0/.test(gesagt),
+     "und nicht der Rest des gerade Ausgeschiedenen: " + gesagt);
+  ok(/Arne|Justus/.test(gesagt), "wer jetzt dran ist, gehoert dazu: " + gesagt);
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");
