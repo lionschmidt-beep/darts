@@ -421,6 +421,54 @@ t("parseSpeech: Multiplikator vor der Zahl", () => {
   eq(p.throws.map(x => x.label), ["T20", "20", "D5"]);
 });
 
+t("Der Multiplikator wird nicht still verschluckt", () => {
+  const { D } = boot();
+  // Gemessen an dem, was Chrome bei de-DE tatsaechlich zurueckgibt. Der schlimme
+  // Fall ist nicht "gar nichts verstanden" - das merkt man -, sondern die stille
+  // Unterschlagung: gesagt "Triple 20", gebucht 20. Faellt beim Spielen keinem auf.
+  const gemeint = [
+    ["tripple 20",        60, "haeufigster Verhoerer"],
+    ["trippel 20",        60, "eingedeutscht geschrieben"],
+    ["treble 20",         60, "der englische Fachbegriff, auch hier ueblich"],
+    ["t20",               60, "Kurzform, wie sie auf jedem Board steht"],
+    ["t 20",              60, "Kurzform mit Leerzeichen"],
+    ["d16",               32, "Doppel-Kurzform"],
+    ["d 16",              32, "Doppel-Kurzform mit Leerzeichen"],
+    ["s20",               20, "Single-Kurzform"],
+    ["dreimal 20",        60, "umgangssprachlich"],
+    ["drei mal 20",       60, "getrennt gesprochen"],
+    ["dreimal die 20",    60, "mit Artikel dazwischen"],
+    ["zweimal 16",        32, "zweimal statt Doppel"],
+    ["zwei mal zwanzig",  40, "getrennt und ausgeschrieben"],
+  ];
+  const falsch = [];
+  for (const [txt, soll, why] of gemeint) {
+    const r = D.parseSpeech(txt, ["lion", "arne"]);
+    const ist = r.throws.reduce((a, t) => a + t.num * t.mult, 0);
+    if (ist !== soll) falsch.push(txt + " -> " + ist + " statt " + soll + " (" + why + ")");
+  }
+  eq(falsch, [], falsch.length + " Ansagen werden falsch gebucht");
+});
+
+t("Eine Multiplikator-Ansage bleibt EIN Dart", () => {
+  const { D } = boot();
+  // "drei mal zwanzig" darf nicht als zwei Wuerfe (3 und 20) durchgehen -
+  // dann waere die Aufnahme nach zwei Ansagen schon voll.
+  eq(D.parseSpeech("drei mal 20", []).throws.length, 1);
+  eq(D.parseSpeech("zwei mal 16", []).throws.length, 1);
+  eq(D.parseSpeech("t20 t20 t20", []).throws.map(x => x.label), ["T20", "T20", "T20"]);
+});
+
+t("Die Kurzform kollidiert nicht mit normalen Zahlen", () => {
+  const { D } = boot();
+  // Ohne Buchstabe bleibt es ein Single - sonst wuerde jede 20 zur T20.
+  eq(D.parseSpeech("20", []).throws[0].label, "20");
+  eq(D.parseSpeech("20 20 20", []).throws.map(x => x.mult), [1, 1, 1]);
+  // Und ein Name, der zufaellig so anfaengt, wird nicht zum Wurf.
+  eq(D.parseSpeech("tom 20", ["tom"]).throws.map(x => x.label), ["20"]);
+  eq(D.parseSpeech("tom 20", ["tom"]).name, "tom");
+});
+
 t("parseSpeech: Kommandos und Bull", () => {
   const { D } = boot();
   eq(D.parseSpeech("zurück", []).cmd, "undo");

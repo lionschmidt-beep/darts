@@ -302,7 +302,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.28";
+var VER    = "1.29";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -2277,8 +2277,11 @@ var ZAHLWORT = {
   "fuenfzig":50,"fünfzig":50,"funfzig":50
 };
 function multWord(w){
-  if(/^(doppel|doppelt|doppelte|doppelten|double|zweifach)$/.test(w)) return 2;
-  if(/^(dreifach|dreifache|dreifachen|tripel|triple|threefold|dreier)$/.test(w)) return 3;
+  // Die Schreibweisen stammen aus einer Messung gegen den Parser, nicht aus dem
+  // Kopf: Chrome gibt bei de-DE "tripple" und "t 20" genauso zurueck wie "triple".
+  if(/^(doppel|doppelt|doppelte|doppelten|double|zweifach|d)$/.test(w)) return 2;
+  if(/^(dreifach|dreifache|dreifachen|tripel|trippel|triple|tripple|treble|trebble|threefold|dreier|t)$/.test(w)) return 3;
+  if(/^(single|einfach|s)$/.test(w)) return 1;
   return 0;
 }
 function normName(s){ return String(s).toLowerCase().replace(/ß/g,"ss").trim(); }
@@ -2309,6 +2312,9 @@ function parseSpeech(text, names){
   var out = {throws:[], name:null, cmd:null, raw:text, zuGross:[]};
   var s = (text||"").toLowerCase().replace(/[.,;:!?]/g," ").replace(/-/g," ").replace(/\s+/g," ").trim();
   if(!s) return out;
+  // "drei mal 20" ist EIN Wurf. Ohne diese Zeile werden daraus zwei Darts (3 und
+  // 20) - die Aufnahme ist dann nach zwei Ansagen voll und zaehlt 23 statt 60.
+  s = s.replace(/\b(zwei|zwo|2)\s*mal\b/g, "doppel").replace(/\b(drei|3)\s*mal\b/g, "triple");
   // Reihenfolge zaehlt: "stimmt nicht" ist eine Korrektur, "stimmt" eine Zusage.
   if(/\b(raus|weg|streich|streiche|loesch|lösch)\b/.test(s)
      || /\bstimmt (nicht|so nicht)\b/.test(s)
@@ -2326,6 +2332,9 @@ function parseSpeech(text, names){
     if(/^(bull|bulls|bullseye|bulle|bullsauge)$/.test(w)){ toks.push({t:"v",v:50}); continue; }
     if(/^(daneben|vorbei|verfehlt|nix|nichts|miss|fehlwurf)$/.test(w)){ toks.push({t:"v",v:0}); continue; }
     if(ZAHLWORT.hasOwnProperty(w)){ toks.push({t:"v",v:ZAHLWORT[w]}); continue; }
+    // "T20" am Stueck - so steht es auf jedem Board und so tippt es jeder.
+    var kurz = /^([tds])(\d{1,2})$/.exec(w);
+    if(kurz){ toks.push({t:"m",v:multWord(kurz[1])}); toks.push({t:"v",v:parseInt(kurz[2],10)}); continue; }
     if(/^\d+$/.test(w)){ toks.push({t:"v",v:parseInt(w,10)}); continue; }
   }
   var pending=1, pset=false;
