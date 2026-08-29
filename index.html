@@ -302,7 +302,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.27";
+var VER    = "1.28";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -2601,6 +2601,16 @@ function applySpokenResultInner(p, rawTxt){
     if(p.throws.length){ korrekturAusfuehren(p.throws[0]); return; }
     updateVoiceStatus('Nicht verstanden. Welcher Wurf soll stattdessen rein?');
     say("Nicht verstanden. Welchen Wurf willst du stattdessen?");
+    return;
+  }
+
+  // "20 raus" ausserhalb des Wartezustands: das ist eine Korrektur ins Leere -
+  // ohne diese Schranke wuerde die 20 als WURF fuer den naechsten Spieler
+  // gebucht, weil der Satz ja eine Zahl enthaelt.
+  if(p.cmd==="raus" && !wartetAufOk()){
+    updateVoiceStatus('Gerade gibt es nichts zu korrigieren &ndash; die Aufnahme ist schon durch.'
+      + ' Mit „zurück" nimmst du den letzten Wurf weg.');
+    say("Da ist gerade nichts zu korrigieren. Sag zurück, wenn du den letzten Wurf wegnehmen willst.");
     return;
   }
 

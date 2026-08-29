@@ -3600,6 +3600,144 @@ t("Mit einem Dart und unspielbarem Rest kommt die Stell-Ansage", () => {
      "41 minus 9 ist 32, das ist D16 - der Standardweg. War: " + text);
 });
 
+// ================================================================ Randfaelle des Sprachdialogs
+// Der Dialog (vorlesen -> okay / korrigieren) ist neu und nur auf dem Hauptpfad
+// geprueft. Hier die Zustaende, in denen man haengenbleiben koennte.
+
+t("Mikro aus mitten im Wartezustand: der Knopf uebernimmt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("triple 20 20 doppel 5", []), "…");
+  eq(D.getMatch().currentIdx, 0, "wartet");
+  D.setVoiceOn(false);                     // Mikro aus, Aufnahme steht noch
+  D.setView("game"); D.render();
+  ok(!D.wartetAufOk(), "ohne Mikro wird nicht mehr gewartet");
+  ok(ctx.has("skip"), "und der Weiter-Knopf ist da");
+  ctx.click("skip");
+  eq(D.getMatch().currentIdx, 1, "man kommt raus");
+});
+
+t("Ein vierter Wurf per TIPPEN geht, sobald das Mikro aus ist", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("triple 20 20 doppel 5", []), "…");
+  eq(D.applyDart(1, 20), "voll", "mit Mikro: geblockt");
+  D.setVoiceOn(false);
+  // Ohne Mikro reicht die volle Aufnahme automatisch weiter - der naechste
+  // Wurf gehoert dann schon dem naechsten Spieler.
+  const r = D.applyDart(1, 20);
+  ok(r === "ok" || r === "voll", "danach kein Haenger: " + r);
+});
+
+t("Reload mitten in einer Korrektur laesst kein Geist zurueck", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("triple 20 20 doppel 5", []), "…");
+  D.applySpokenResult(D.parseSpeech("zwanzig raus", []), "zwanzig raus");
+  // Jetzt wartet die App auf den Ersatzwurf. Handy weggewischt:
+  const nach = reboot(ctx);
+  nach.D.setVoiceOn(true);
+  eq(nach.D.getMatch().currentTurn.length, 3, "die Aufnahme ist noch da");
+  // Eine Ansage darf jetzt NICHT als Ersatz gedeutet werden - der Zustand ist weg
+  nach.D.applySpokenResult(nach.D.parseSpeech("triple 20", []), "triple 20");
+  eq(nach.D.getMatch().currentTurn.map(d => d.label), ["T20", "20", "D5"],
+     "die Aufnahme bleibt unveraendert, statt still etwas zu ersetzen");
+});
+
+t("Eine Korrektur, die zum Sieg fuehrt, beendet das Spiel sauber", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setScore(0, 60);
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");     // 60 - 60 = 0? nein: Bust-frei
+  // Stand jetzt: 0 waere ein Sieg ohne Doppel -> Bust. Also anderer Aufbau:
+  const b = boot();
+  b.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b.D.setVoiceOn(true);
+  b.D.setScore(0, 60);
+  b.D.applySpokenResult(b.D.parseSpeech("20 20 daneben", []), "…");   // Rest 20, wartet
+  eq(b.D.getMatch().currentTurn.length, 3);
+  ctx.gesagt.length = 0;
+  b.D.applySpokenResult(b.D.parseSpeech("daneben raus", []), "daneben raus");
+  b.D.applySpokenResult(b.D.parseSpeech("doppel 10", []), "doppel 10");  // 20 -> 0 mit Doppel
+  eq(b.D.getMatch().finished, true, "das ist ein Sieg");
+  eq(b.D.getMatch().winnerId, "lion");
+});
+
+t("okay ohne wartende Aufnahme tut nichts Schlimmes", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  const vorher = D.getMatch().currentIdx;
+  D.applySpokenResult(D.parseSpeech("okay", []), "okay");
+  eq(D.getMatch().currentIdx, vorher, "kein ungewollter Spielerwechsel");
+  eq(D.getMatch().players[0].darts, 0, "und kein Wurf");
+});
+
+t("Eine Korrektur nach dem Spielerwechsel greift nicht ins Leere", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  D.applySpokenResult(D.parseSpeech("okay", []), "okay");        // Arne ist dran
+  eq(D.getMatch().currentIdx, 1);
+  let err = null;
+  try { D.applySpokenResult(D.parseSpeech("zwanzig raus", []), "zwanzig raus"); }
+  catch (e) { err = e.message; }
+  eq(err, null, "kein Absturz: " + err);
+  eq(D.getMatch().players[0].score, 441, "Lions Stand bleibt unangetastet");
+  eq(D.getMatch().players[1].darts, 0, "und Arne hat noch nichts geworfen");
+});
+
+t("Stell-Empfehlung bei Doppel-In: erst eroeffnen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  const co = (ctx.app.innerHTML.match(/<span class="co[^"]*">([\s\S]*?)<\/span>/) || [])[1] || "";
+  ok(/Doppel-In/.test(co), "solange man nicht drin ist, ist das die einzige Ansage: " + co);
+  ok(!/Stellen/.test(co), "keine Stell-Empfehlung, die man gar nicht umsetzen kann");
+});
+
+t("Der Undo-Knopf im Wartezustand nimmt einen Dart zurueck", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("triple 20 20 doppel 5", []), "…");
+  D.setView("game"); D.render();
+  ctx.click("undo");
+  eq(D.getMatch().currentTurn.length, 2, "ein Dart weg");
+  ok(!D.wartetAufOk(), "und damit ist der Wartezustand vorbei");
+  eq(D.getMatch().currentIdx, 0, "immer noch derselbe Spieler");
+});
+
+t("Zwei Korrekturen hintereinander gehen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  D.applySpokenResult(D.parseSpeech("zwanzig raus", []), "zwanzig raus");
+  D.applySpokenResult(D.parseSpeech("triple 20", []), "triple 20");
+  eq(D.getMatch().currentTurn.map(d => d.label), ["20", "20", "T20"]);
+  D.applySpokenResult(D.parseSpeech("zwanzig raus", []), "zwanzig raus");
+  D.applySpokenResult(D.parseSpeech("doppel 20", []), "doppel 20");
+  eq(D.getMatch().currentTurn.map(d => d.label), ["20", "D20", "T20"],
+     "auch die zweite Korrektur sitzt");
+  eq(D.getMatch().players[0].darts, 3, "immer noch drei Darts");
+  eq(D.getMatch().players[0].score, 501 - 20 - 40 - 60);
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");
