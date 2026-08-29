@@ -563,6 +563,85 @@ t("Die Stell-Empfehlung schweigt, wo sie nichts zu sagen hat", () => {
      (b.app.innerHTML.match(/<span class="co[^"]*">([^<]*)/) || [])[1]);
 });
 
+t("Gesprochen und angezeigt gilt derselbe Massstab", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  const t2 = ctx.gesagt.join(" ");
+  // In der Anzeige ist "Stellen: 20 -> 441" schon gefiltert. Gesprochen kam es
+  // weiter - ein Filter, der nur die Haelfte der Stellen erreicht, ist keiner.
+  ok(!/[Ss]tell dich/.test(t2), "kein Fuellmaterial in der Ansage: " + t2);
+  // Wo die Empfehlung etwas weiss, sagt sie es weiter - mit dem Doppel dazu.
+  const b2 = boot();
+  b2.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b2.D.setVoiceOn(true);
+  b2.D.setScore(0, 41);
+  b2.gesagt.length = 0;
+  // Mit zwei Darts ist 41 ausspielbar (17, D12) - gestellt wird erst beim letzten.
+  b2.D.applySpokenResult(b2.D.parseSpeech("daneben daneben", []), "daneben daneben");
+  const t3 = b2.gesagt.join(" ");
+  ok(/[Ss]tell dich/.test(t3), "hier schon: " + t3);
+  ok(/Doppel 16|32/.test(t3), "und sie nennt das Doppel: " + t3);
+});
+
+t("Tippen im Wartezustand sagt, was zu tun ist", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  D.setView("game"); D.render();
+  // Zu zweit spielt einer an und der andere tippt. Wer im Wartezustand tippt,
+  // bekam bisher NULL Rueckmeldung - die App wirkte eingefroren.
+  eq(D.applyDart(1, 19), "voll", "der Wurf wird nicht gebucht");
+  const status = ctx.els.voiceStatus.innerHTML || "";
+  // NICHT auf "okay" pruefen: das steht schon in der vorherigen Meldung
+  // ("Sag okay"), der Test waere damit auch ohne den Fix gruen.
+  ok(/steht noch/i.test(status),
+     "aber es muss dastehen, warum nichts passiert: " + status);
+  ok(/data-act="wok"/.test(ctx.app.innerHTML),
+     "und der Ausweg muss als Knopf dastehen, nicht nur als Satz");
+  ctx.click("wok");
+  eq(D.getMatch().currentIdx, 1, "der Knopf tut, was er verspricht");
+});
+
+t("Beim Spielerwechsel wird gesagt, worauf der Naechste zielt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setScore(1, 40);                       // Arne steht auf 40 = D20
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("okay", []), "okay");
+  const t2 = ctx.gesagt.join(" ");
+  ok(/arne/i.test(t2), "wer dran ist: " + t2);
+  ok(/40/.test(t2), "auf welchem Rest er steht: " + t2);
+  ok(/Doppel 20|Finish/i.test(t2), "und worauf er zielt: " + t2);
+});
+
+t("Nach einem Sieg per Sprache kommt man zurueck", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setScore(0, 40);
+  D.applySpokenResult(D.parseSpeech("doppel 20", []), "doppel 20");
+  eq(D.getMatch().finished, true, "das Spiel ist gewonnen");
+  D.render();
+  // Der eine Wurf, bei dem ein Verhoerer das ganze Spiel kostet, ist der einzige
+  // ohne Rueckfrage. Also muss der Weg zurueck wenigstens sichtbar sein.
+  ok(/verhört|Zurück|zurück/i.test(ctx.app.innerHTML),
+     "auf dem Siegerbildschirm muss ein Weg zurueck stehen");
+  ctx.click("undo");
+  eq(D.getMatch().finished, false, "und er muss funktionieren");
+  eq(D.getMatch().players[0].score, 40, "der Stand ist wieder wie vorher");
+});
+
 t("parseSpeech: Kommandos und Bull", () => {
   const { D } = boot();
   eq(D.parseSpeech("zurück", []).cmd, "undo");
@@ -1310,6 +1389,18 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
     D.setView(v); D.render(); sammle();
   });
   D.setPlayerSel("lion"); D.setView("player"); D.render(); sammle();
+
+  // Der Warte-Kasten erscheint nur mit Mikro und voller Aufnahme - seine Knoepfe
+  // waeren sonst als "nirgends angeboten" gemeldet, obwohl es sie gibt.
+  {
+    const w = boot();
+    w.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    w.D.setVoiceOn(true);
+    w.D.applySpokenResult(w.D.parseSpeech("20 20 20", []), "…");
+    w.D.setView("game"); w.D.render();
+    (w.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+      .forEach(x => angeboten.add(x.slice(10, -1)));
+  }
 
   // Laufendes Spiel: Board, Summen-Pad, Leg-Zwischenstand
   D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 3 });

@@ -178,6 +178,9 @@
     border-radius:12px; padding:10px 12px; margin:-4px 0 10px; text-align:center;
     font-size:13px; color:var(--gold); line-height:1.45;}
   .warteok b{color:var(--text);}
+  .warterow{display:flex; gap:8px; margin-top:10px;}
+  .warterow .btn{flex:1; min-width:0;}
+  .warterow .btn.wok{background:var(--green); color:#08210f; border-color:transparent; font-weight:700;}
   .lastturn{font-size:12.5px; color:var(--muted); text-align:center; margin:-4px 0 10px;
     line-height:1.4; overflow-wrap:anywhere;}
   .lastturn b{color:var(--text); font-weight:700;}
@@ -302,7 +305,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.30";
+var VER    = "1.31";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -800,9 +803,23 @@ function ratText(rest, dartsLeft, doubleOut){
   var co = checkout(rest, dartsLeft, doubleOut);
   if(co) return "Finish: " + co.map(function(l){ return sagbar(l); }).join(", ");
   var st = stellEmpfehlung(rest, dartsLeft, doubleOut);
-  if(st) return "Stell dich mit " + sagbar(st.label) + " auf " + st.ziel;
+  // Derselbe Filter wie in der Anzeige. Ohne ihn sagt sie bei 501 "stell dich mit
+  // 20 auf 481" - in der Anzeige war das schon weg, gesprochen kam es weiter.
+  if(st && stellNuetzlich(st, dartsLeft, doubleOut))
+    return "Stell dich mit " + sagbar(st.label) + " auf " + st.ziel
+           + zielName(st.ziel, doubleOut).replace(" (D", ", Doppel ").replace(")", "");
   return "";
 }
+// "Arne ist dran" allein hilft dem nicht, der an der Scheibe steht und das Handy
+// weggelegt hat. Rest und Finish gehoeren dazu - das ist der ganze Sinn der Ansage.
+function dranText(){
+  var m = state.match; if(!m) return "";
+  var p = m.players[m.currentIdx];
+  var t = p.name + " ist dran. " + p.score;
+  var r = ratText(p.score, 3, m.doubleOut);
+  return r ? t + ". " + r : t;
+}
+
 // Der Fehlwurf heisst intern "&#10007;". Als Vorschlag im Satz („sag ✗ raus")
 // ist das Unsinn - und escaped steht dort woertlich der Entity-Code.
 function nennbar(label){ return label === "&#10007;" ? "daneben" : label; }
@@ -890,7 +907,15 @@ function winLeg(p){
 // Rueckgabe: ok | bust | leg | win | nostart | noop
 function applyDart(mult, num){
   var m = state.match; if(!m || m.finished) return "noop";
-  if(wartetAufOk()) return "voll";      // erst bestaetigen, dann weiterwerfen
+  if(wartetAufOk()){
+    // Zu zweit sagt einer an und der andere tippt. Wer hier tippte, bekam bisher
+    // gar keine Rueckmeldung - der Knopf sah normal aus, es passierte nur nichts.
+    // Die Meldung sitzt in applyDart, damit sie fuer JEDEN Eingabeweg gilt.
+    updateVoiceStatus('&#9757;&#65039; Die Aufnahme steht noch: <b>'
+      + m.currentTurn.map(function(d){ return nennbar(d.label); }).join(" ")
+      + '</b>. Sag „okay" oder tippe <b>Passt</b>.');
+    return "voll";
+  }
   var dv = dartValue(mult, num);
   snapshot();
   var p = m.players[m.currentIdx];
@@ -1442,7 +1467,11 @@ function renderGame(){
     + '</div>'
     + (wartetAufOk()
         ? '<div class="warteok">Stimmt das? Sag <b>„okay"</b> &ndash; oder <b>„'
-          + esc(nennbar(m.currentTurn[0].label))+' raus"</b>, um einen Wurf zu ändern.</div>'
+          + esc(nennbar(m.currentTurn[0].label))+' raus"</b>, um einen Wurf zu ändern.'
+          + '<div class="warterow">'
+          +   '<button class="btn wok" data-act="wok">&#10003;&nbsp; Passt</button>'
+          +   '<button class="btn" data-act="undo">&#8630;&nbsp; Zurück</button>'
+          + '</div></div>'
         : '')
     + lastTurnLine(m)
     + '<div class="seg modeseg">'
@@ -2649,7 +2678,7 @@ function applySpokenResultInner(p, rawTxt){
       korrigiere = null;
       snapshot(); endTurn(); save(); render();
       updateVoiceStatus("&#8594; nächster Spieler");
-      say("Okay. " + state.match.players[state.match.currentIdx].name + " ist dran.");
+      say("Okay. " + dranText());
       return;
     }
     if(p.cmd==="stop"){ korrigiere=null; stopVoice(); render(); return; }
@@ -2685,7 +2714,7 @@ function applySpokenResultInner(p, rawTxt){
     if(p.cmd==="ok" || p.cmd==="skip"){
       snapshot(); endTurn(); save(); render();
       updateVoiceStatus("&#8594; nächster Spieler");
-      say(state.match.players[state.match.currentIdx].name + " ist dran.");
+      say(dranText());
       return;
     }
     if(p.cmd==="undo"){
@@ -3081,6 +3110,15 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="mult"){ curMult=parseInt(t.getAttribute("data-m"),10); render(); return; }
   if(act==="num"){ applyDart(curMult, parseInt(t.getAttribute("data-n"),10)); return; }
   if(act==="undo"){ undo(); return; }
+  // "Passt" ist der getippte Zwilling des gesprochenen "okay" - inklusive Ansage,
+  // damit man auch mit weggelegtem Handy hoert, wer als naechstes dran ist.
+  if(act==="wok"){
+    if(state.match && !state.match.finished){
+      snapshot(); endTurn(); save(); render();
+      if(voiceOn){ updateVoiceStatus("&#8594; nächster Spieler"); say(dranText()); }
+    }
+    return;
+  }
   if(act==="skip"){ if(state.match&&!state.match.finished){ snapshot(); endTurn(); save(); render(); } return; }
   if(act==="quit"){ if(confirm("Spiel abbrechen? Kein Sieg wird gezählt.")){ state.match=null; view="home"; save(); render(); } return; }
 
