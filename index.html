@@ -174,6 +174,10 @@
     background:var(--card2);}
   .slot.filled{border-style:solid; border-color:var(--accent); color:var(--text);}
   .slot.dead{border-color:var(--line); color:var(--muted); text-decoration:line-through;}
+  .warteok{background:rgba(245,196,81,.10); border:1px solid rgba(245,196,81,.35);
+    border-radius:12px; padding:10px 12px; margin:-4px 0 10px; text-align:center;
+    font-size:13px; color:var(--gold); line-height:1.45;}
+  .warteok b{color:var(--text);}
   .lastturn{font-size:12.5px; color:var(--muted); text-align:center; margin:-4px 0 10px;
     line-height:1.4; overflow-wrap:anywhere;}
   .lastturn b{color:var(--text); font-weight:700;}
@@ -297,7 +301,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.24";
+var VER    = "1.25";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -791,6 +795,7 @@ function winLeg(p){
 // Rueckgabe: ok | bust | leg | win | nostart | noop
 function applyDart(mult, num){
   var m = state.match; if(!m || m.finished) return "noop";
+  if(wartetAufOk()) return "voll";      // erst bestaetigen, dann weiterwerfen
   var dv = dartValue(mult, num);
   snapshot();
   var p = m.players[m.currentIdx];
@@ -801,13 +806,13 @@ function applyDart(mult, num){
   // wird mit Wert 0 gebucht, sonst zeigt die Aufnahme-Summe Punkte an, die
   // nirgendwo abgezogen wurden.
   if(m.doubleIn && p.legStart && !dv.isDouble){
-    m.currentTurn.push({label:dv.label, value:0, isDouble:false, nostart:true});
+    m.currentTurn.push({label:dv.label, value:0, isDouble:false, nostart:true, mult:mult, num:num});
     if(m.currentTurn.length>=3) endTurn("nostart");
     save(); render(); return "nostart";
   }
   if(m.doubleIn && p.legStart) p.legStart = false;
 
-  m.currentTurn.push({label:dv.label, value:dv.value, isDouble:dv.isDouble});
+  m.currentTurn.push({label:dv.label, value:dv.value, isDouble:dv.isDouble, mult:mult, num:num});
   var ns = p.score - dv.value;
 
   if(ns===0 && (!m.doubleOut || dv.isDouble)){          // Leg ausgemacht
@@ -824,7 +829,7 @@ function applyDart(mult, num){
     bust(); save(); render(); return "bust";
   }
   p.score = ns;
-  if(m.currentTurn.length>=3) endTurn();
+  if(m.currentTurn.length>=3 && !wartetAufOk()) endTurn();
   save(); render(); return "ok";
 }
 
@@ -1333,6 +1338,10 @@ function renderGame(){
                    : '<span class="sum">Aufnahme: <b>'+turnSum+'</b></span>')
     + '</div>'
     + '</div>'
+    + (wartetAufOk()
+        ? '<div class="warteok">Stimmt das? Sag <b>„okay"</b> &ndash; oder <b>„'
+          + esc(m.currentTurn[0].label)+' raus"</b>, um einen Wurf zu ändern.</div>'
+        : '')
     + lastTurnLine(m)
     + '<div class="seg modeseg">'
     +   '<button class="btn'+(sumMode()?"":" on")+'" data-act="imode" data-v="single">Einzeln</button>'
@@ -1358,8 +1367,11 @@ function renderGame(){
       + (ttsOn?'&#128266;':'&#128263;') + '</button>'
     + '</div>'
     + '<div class="vstat" id="voiceStatus"></div>'
-    + '<div class="vhint">'+(ttsOn?'Ansage ist an &ndash; die App sagt jede Aufnahme laut. ':'')
-    + 'Doppel/Triple <b>vor</b> die Zahl: „Triple 20, 20, Doppel 5" &middot; „Bull" &middot; „daneben" &middot; „zurück" &middot; „weiter"</div>'
+    + '<div class="vhint">'
+    + 'Doppel/Triple <b>vor</b> die Zahl: „Triple 20, 20, Doppel 5" &middot; „Bull" &middot; „daneben"<br>'
+    + 'Nach drei Darts liest die App vor, was sie verstanden hat. Dann: '
+    + '<b>„okay"</b> &rarr; nächster Spieler &middot; <b>„20 raus"</b> &rarr; sie fragt, '
+    + 'was stattdessen rein soll &middot; <b>„zurück"</b> &rarr; letzten Wurf löschen.</div>'
     + '</div>'
     + '<button class="btn ghost danger sm" data-act="quit" style="width:auto;margin:12px auto 0">Spiel abbrechen</button>';
 }
@@ -2217,7 +2229,12 @@ function parseSpeech(text, names){
   var out = {throws:[], name:null, cmd:null, raw:text};
   var s = (text||"").toLowerCase().replace(/[.,;:!?]/g," ").replace(/-/g," ").replace(/\s+/g," ").trim();
   if(!s) return out;
-  if(/\b(zurueck|zurück|rueckgaengig|rückgängig|falsch|korrektur|revidieren)\b/.test(s)) out.cmd="undo";
+  // Reihenfolge zaehlt: "stimmt nicht" ist eine Korrektur, "stimmt" eine Zusage.
+  if(/\b(raus|weg|streich|streiche|loesch|lösch)\b/.test(s)
+     || /\bstimmt (nicht|so nicht)\b/.test(s)
+     || /\bnicht richtig\b/.test(s)) out.cmd="raus";
+  else if(/\b(okay|ok|oke|passt|stimmt|richtig|korrekt|jup|jo|ja)\b/.test(s)) out.cmd="ok";
+  else if(/\b(zurueck|zurück|rueckgaengig|rückgängig|korrektur|revidieren)\b/.test(s)) out.cmd="undo";
   else if(/\b(weiter|naechster|nächster|fertig|beenden)\b/.test(s)) out.cmd="skip";
   else if(/\b(stopp|stop|aufhoeren|aufhören|hoer auf|hör auf|mikro aus)\b/.test(s)) out.cmd="stop";
   var words = s.split(" ");
@@ -2308,6 +2325,91 @@ function updateVoiceStatus(msg){
   el.innerHTML='<span style="color:var(--green)">&#9679; hört zu …</span>'+(voiceMsg?' &nbsp;'+voiceMsg:'');
 }
 
+// ---------------------------------------------------------------------------
+// Sprachmodus: volle Aufnahme vorlesen, bestaetigen, einzeln korrigieren
+//
+// Beim Tippen sieht man, was man drueckt. Beim Sprechen nicht - und wenn die
+// Erkennung nach dem dritten Dart sofort weiterschaltet, faellt ein falsch
+// verstandener Wurf mitten im Spiel niemandem mehr auf. Deshalb bleibt die
+// Aufnahme stehen, wird vorgelesen und wartet auf "okay".
+//
+// Kein eigenes Zustandsfeld: ob gewartet wird, ergibt sich aus der Lage. So
+// muss auch nichts im Undo-Schnappschuss mitgefuehrt werden.
+// ---------------------------------------------------------------------------
+var korrigiere = null;    // {pos, label} - welcher Wurf gerade ersetzt wird
+
+function wartetAufOk(){
+  var m = state.match;
+  return !!(m && !m.finished && typeof voiceOn !== "undefined" && voiceOn
+            && m.currentTurn.length >= 3);
+}
+
+function leseAufnahmeVor(){
+  var m = state.match; if(!m) return;
+  var p = m.players[m.currentIdx];
+  var gesprochen = m.currentTurn.map(function(d){ return sayLabel(d.mult, d.num); }).join(", ");
+  var kurz = m.currentTurn.map(function(d){ return d.label; }).join(" ");
+  updateVoiceStatus('<b>'+esc(p.name)+'</b>: '+kurz+' &middot; Rest <b>'+p.score+'</b>'
+    + ' &middot; stimmt das? Sag „okay" &ndash; oder „'+esc(m.currentTurn[0].label)+' raus".');
+  say(gesprochen + ". Rest " + p.score + ". Stimmt das?");
+}
+
+// "zwanzig raus" - welchen Wurf meint er? Bei mehreren gleichen den letzten,
+// und das wird dazugesagt, damit klar ist, was passiert.
+function korrekturStarten(wurf){
+  var m = state.match;
+  var pos = -1;
+  for(var i=m.currentTurn.length-1;i>=0;i--){
+    if(m.currentTurn[i].label === wurf.label){ pos = i; break; }
+  }
+  if(pos < 0){
+    updateVoiceStatus('&#9888;&#65039; <b>'+esc(wurf.label)+'</b> steht gar nicht in dieser Aufnahme.');
+    say(sayLabel(wurf.mult, wurf.num) + " steht da nicht. Sag okay, oder nenn einen Wurf, der drinsteht.");
+    return;
+  }
+  var wieOft = 0;
+  for(var j=0;j<m.currentTurn.length;j++) if(m.currentTurn[j].label===wurf.label) wieOft++;
+  var welcher = wieOft > 1 ? (pos === m.currentTurn.length-1 ? "der letzte " : "der " + (pos+1) + ". ") : "";
+  korrigiere = { pos: pos, label: wurf.label };
+  updateVoiceStatus('Was soll statt <b>'+esc(wurf.label)+'</b> rein?'
+    + (wieOft>1 ? ' <span class="muted">('+(pos===m.currentTurn.length-1?'der letzte':'der '+(pos+1)+'.')+')</span>' : ''));
+  say("Okay, " + welcher + sayLabel(wurf.mult, wurf.num) + " raus. Was willst du statt "
+      + sayLabel(wurf.mult, wurf.num) + " haben?");
+}
+
+// Ersatz einsetzen: die ganze Aufnahme zurueckdrehen und neu einwerfen. Das ist
+// der einzige Weg, bei dem Punkte, Bust-Pruefung und Statistik garantiert
+// wieder zusammenpassen.
+function korrekturAusfuehren(neu){
+  var m = state.match;
+  var liste = m.currentTurn.map(function(d){ return { mult:d.mult, num:d.num }; });
+  liste[korrigiere.pos] = { mult:neu.mult, num:neu.num };
+  korrigiere = null;
+
+  var idxVorher = m.currentIdx, ergebnis = "ok";
+  quietSay = true;
+  try{
+    while(state.match && state.match.currentTurn.length && undo()){}
+    for(var i=0;i<liste.length;i++){
+      if(!state.match || state.match.finished) break;
+      ergebnis = applyDart(liste[i].mult, liste[i].num);
+      if(ergebnis !== "ok" && ergebnis !== "voll") break;
+    }
+  } finally { quietSay = false; }
+
+  var m2 = state.match;
+  if(!m2 || m2.finished){ say("Spiel!"); return; }
+  if(m2.currentIdx !== idxVorher){
+    // Die Korrektur hat einen Bust erzeugt - die Aufnahme ist verfallen.
+    var lt = m2.lastTurn;
+    updateVoiceStatus('&#128165; So ist es überworfen &ndash; zurück auf <b>'
+      + (lt?lt.rest:'') + '</b>, nächster Spieler.');
+    say("So ist es überworfen. Zurück auf " + (lt?lt.rest:"") + ".");
+    return;
+  }
+  leseAufnahmeVor();
+}
+
 // -- Erkanntes umsetzen: Kommandos, Namens-Check, dann Wuerfe eintragen + Rueckmeldung
 function applySpokenResult(p, rawTxt){
   var m=state.match; if(!m || m.finished) return;
@@ -2316,6 +2418,50 @@ function applySpokenResult(p, rawTxt){
 }
 function applySpokenResultInner(p, rawTxt){
   var m=state.match; if(!m || m.finished) return;
+
+  // Eine Korrektur laeuft: die naechste Ansage ist der Ersatzwurf.
+  if(korrigiere){
+    if(p.cmd==="ok"){
+      korrigiere = null;
+      snapshot(); endTurn(); save(); render();
+      updateVoiceStatus("&#8594; nächster Spieler");
+      say("Okay. " + state.match.players[state.match.currentIdx].name + " ist dran.");
+      return;
+    }
+    if(p.cmd==="stop"){ korrigiere=null; stopVoice(); render(); return; }
+    if(p.throws.length){ korrekturAusfuehren(p.throws[0]); return; }
+    updateVoiceStatus('Nicht verstanden. Welcher Wurf soll stattdessen rein?');
+    say("Nicht verstanden. Welchen Wurf willst du stattdessen?");
+    return;
+  }
+
+  // Die Aufnahme ist voll und wartet auf Bestaetigung.
+  if(wartetAufOk()){
+    if(p.cmd==="ok" || p.cmd==="skip"){
+      snapshot(); endTurn(); save(); render();
+      updateVoiceStatus("&#8594; nächster Spieler");
+      say(state.match.players[state.match.currentIdx].name + " ist dran.");
+      return;
+    }
+    if(p.cmd==="undo"){
+      if(undo()){
+        updateVoiceStatus("&#8617;&#65039; letzter Wurf zurück");
+        say("Zurück. Sag den Wurf nochmal.");
+      } else { say("Da ist nichts zum Zurücknehmen"); }
+      return;
+    }
+    if(p.cmd==="raus"){
+      if(p.throws.length) korrekturStarten(p.throws[0]);
+      else {
+        updateVoiceStatus('Welcher Wurf soll raus? Zum Beispiel „20 raus".');
+        say("Welcher Wurf soll raus?");
+      }
+      return;
+    }
+    if(p.cmd==="stop"){ stopVoice(); render(); return; }
+    leseAufnahmeVor();     // alles andere: nochmal vorlesen
+    return;
+  }
   // Zwischen zwei Legs bleibt das Mikro absichtlich an. Ein Wurf darf dann aber
   // nicht ins naechste Leg rutschen, waehrend auf dem Schirm noch der Zwischenstand steht.
   if((view==="leg" || view==="platz") && !(p.cmd==="skip" || p.cmd==="stop" || p.cmd==="undo")){
@@ -2387,6 +2533,12 @@ function applySpokenResultInner(p, rawTxt){
   if(event==="bust"){
     updateVoiceStatus('&#128165; '+esc(cur.name)+': '+esc(labels)+' – überworfen, zurück auf <b>'+cur.score+'</b>');
     say(spoken+". Überworfen. Zurück auf "+cur.score); return;
+  }
+  if(wartetAufOk()){
+    // Volle Aufnahme: vorlesen und auf "okay" warten, statt stillschweigend
+    // weiterzureichen. Ein falsch verstandener Wurf faellt sonst niemandem auf.
+    leseAufnahmeVor();
+    return;
   }
   var extra = (applied.length<p.throws.length) ? ' (Aufnahme voll, Rest verworfen)' : '';
   updateVoiceStatus('&#127919; '+esc(cur.name)+': <b>'+esc(labels)+'</b> &middot; Rest <b>'+cur.score+'</b>'+extra);
@@ -2705,6 +2857,7 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
   meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
   setSR:function(x){ SR=x; recog=null; }, nameOf:nameOf, idBelegt:idBelegt,
+  setVoiceOn:function(v){ voiceOn=!!v; }, wartetAufOk:wartetAufOk,
   applyTurnSum:applyTurnSum, sumMode:sumMode,
   reload:function(){ state=load(); view=restoreView(); },
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,

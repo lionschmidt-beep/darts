@@ -3150,6 +3150,190 @@ t("Der Sprachmodus sagt an, wenn jemand durch ist", () => {
   ok(/Arne|Justus/.test(gesagt), "wer jetzt dran ist, gehoert dazu: " + gesagt);
 });
 
+// ================================================================ Sprachmodus: Vorlesen und korrigieren
+// Beim Tippen sieht man, was man drueckt. Beim Sprechen nicht - und wenn die
+// Erkennung nach dem dritten Dart sofort weiterschaltet, faellt ein falsch
+// verstandener Wurf im Spiel nicht mehr auf. Deshalb: vorlesen, bestaetigen,
+// notfalls einzeln korrigieren - alles per Sprache, Handy bleibt liegen.
+const sprich = (D, text) => D.applySpokenResult(D.parseSpeech(text, []), text);
+
+t("Nach drei Darts liest die App vor, was sie verstanden hat", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  ctx.gesagt.length = 0;
+  sprich(D, "triple 20 20 doppel 5");
+  const m = D.getMatch();
+  eq(m.currentIdx, 0, "noch niemand weitergereicht");
+  eq(m.currentTurn.length, 3, "die drei Wuerfe stehen da");
+  eq(m.players[0].score, 411, "gerechnet wird trotzdem: 501-60-20-10");
+  const text = ctx.gesagt.join(" | ");
+  ok(/Triple 20/i.test(text), "der erste Wurf wird genannt: " + text);
+  ok(/Doppel 5/i.test(text), "und der letzte");
+  ok(/411/.test(text), "dazu der Rest");
+  ok(/stimmt|okay|passt/i.test(text), "und die Frage, ob es stimmt");
+});
+
+t("okay schaltet zum naechsten Spieler", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  sprich(D, "okay");
+  eq(D.getMatch().currentIdx, 1, "jetzt ist Arne dran");
+  eq(D.getMatch().currentTurn.length, 0, "und die Anzeige ist frei");
+  eq(D.getMatch().players[0].score, 411, "der Stand bleibt");
+});
+
+t("passt und stimmt tun dasselbe", () => {
+  ["passt", "stimmt", "ja", "weiter"].forEach(wort => {
+    const ctx = boot();
+    const D = ctx.D;
+    D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    D.setVoiceOn(true);
+    sprich(D, "20 20 20");
+    sprich(D, wort);
+    eq(D.getMatch().currentIdx, 1, wort + " muss auch gehen");
+  });
+});
+
+t("zwanzig raus fragt, was stattdessen kommen soll", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  ctx.gesagt.length = 0;
+  sprich(D, "zwanzig raus");
+  const frage = ctx.gesagt.join(" ");
+  ok(/statt/i.test(frage) && /20/.test(frage),
+     "die App muss fragen, was statt der 20 kommt. War: " + frage);
+  eq(D.getMatch().currentIdx, 0, "und noch nicht weiterreichen");
+});
+
+t("Der Ersatzwurf wird eingesetzt und neu vorgelesen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  eq(D.getMatch().players[0].score, 411, "Ausgangslage");
+  sprich(D, "zwanzig raus");
+  ctx.gesagt.length = 0;
+  sprich(D, "triple 20");
+  const m = D.getMatch();
+  eq(m.currentTurn.map(d => d.label), ["T20", "T20", "D5"], "die Aufnahme ist korrigiert");
+  eq(m.players[0].score, 371, "und neu gerechnet: 501-60-60-10");
+  eq(m.players[0].darts, 3, "immer noch drei Darts, kein vierter");
+  ok(/371/.test(ctx.gesagt.join(" ")), "der neue Rest wird vorgelesen: " + ctx.gesagt.join(" "));
+});
+
+t("Kommt der Wurf doppelt vor, wird der letzte ersetzt und das gesagt", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "20 20 20");
+  ctx.gesagt.length = 0;
+  sprich(D, "zwanzig raus");
+  ok(/letzte|dritte|hinten/i.test(ctx.gesagt.join(" ")),
+     "bei mehreren gleichen muss klar sein, welcher gemeint ist: " + ctx.gesagt.join(" "));
+  sprich(D, "triple 20");
+  eq(D.getMatch().currentTurn.map(d => d.label), ["20", "20", "T20"]);
+});
+
+t("Ein Wurf, den es in der Aufnahme nicht gibt, wird abgewiesen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  ctx.gesagt.length = 0;
+  sprich(D, "bull raus");
+  ok(/nicht|kein/i.test(ctx.gesagt.join(" ")),
+     "die App muss sagen, dass da kein Bull steht: " + ctx.gesagt.join(" "));
+  eq(D.getMatch().currentTurn.length, 3, "und nichts anfassen");
+});
+
+t("Die Korrektur laesst sich abbrechen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  sprich(D, "zwanzig raus");
+  sprich(D, "doch okay");
+  eq(D.getMatch().currentIdx, 1, "doch okay reicht weiter wie ein normales okay");
+});
+
+t("Ein vierter Wurf wird abgewiesen, solange nicht bestaetigt ist", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  const vorher = D.getMatch().players[0].score;
+  eq(D.applyDart(3, 20), "voll", "die Aufnahme ist voll");
+  eq(D.getMatch().players[0].score, vorher, "nichts weiter abgezogen");
+  eq(D.getMatch().players[0].darts, 3, "und kein vierter Dart gezaehlt");
+});
+
+t("Beim Tippen bleibt der Wechsel automatisch", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(false);
+  seq(D, ["T20", "20", "D5"]);
+  eq(D.getMatch().currentIdx, 1, "hier sieht man ja, was man drueckt");
+  eq(D.getMatch().currentTurn.length, 0);
+});
+
+t("Der Wartezustand steht auch auf dem Bildschirm", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  sprich(D, "triple 20 20 doppel 5");
+  D.setView("game"); D.render();
+  const html = ctx.app.innerHTML;
+  ok(/stimmt das/i.test(html), "der Schirm sagt, worauf gewartet wird");
+  ok(ctx.has("skip"), "und es gibt einen Knopf, falls man doch tippen will");
+});
+
+t("Ausmachen und Bust reichen weiter wie bisher", () => {
+  const a = boot();
+  a.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  a.D.setVoiceOn(true);
+  a.D.setScore(0, 40);
+  sprich(a.D, "doppel 20");
+  eq(a.D.getMatch().finished, true, "ein Sieg wartet auf nichts");
+
+  const b = boot();
+  b.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  b.D.setVoiceOn(true);
+  b.D.setScore(0, 20);
+  sprich(b.D, "triple 20");
+  eq(b.D.getMatch().currentIdx, 1,
+     "beim Bust bleibt der Punktestand unveraendert - da schadet der Wechsel nicht");
+});
+
+t("Zwei Wuerfe ansagen, dann der dritte - erst danach wird vorgelesen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  ctx.gesagt.length = 0;
+  sprich(D, "triple 20 20");
+  eq(D.getMatch().currentTurn.length, 2);
+  ok(!/stimmt/i.test(ctx.gesagt.join(" ")), "nach zwei Darts noch keine Nachfrage");
+  ctx.gesagt.length = 0;
+  sprich(D, "doppel 5");
+  ok(/stimmt/i.test(ctx.gesagt.join(" ")), "nach dem dritten schon");
+  eq(D.getMatch().currentIdx, 0);
+});
+
 // ---------------------------------------------------------------- Ausgabe
 await Promise.all(offen);            // asynchrone Tests abwarten
 console.log("");
