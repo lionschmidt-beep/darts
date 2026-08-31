@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.37";
+var VER    = "1.38";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -484,6 +484,12 @@ var syncZuletzt = null;       // was zuletzt rausging - damit render() nachfasse
 var syncVerworfen = false;    // hat der letzte Empfang eigene, ungesendete Wuerfe geschluckt?
 var syncVersucht = null;      // was zuletzt losgeschickt wurde (gegen doppeltes Senden)
 var syncFremdeVersion = false; // das andere Handy laeuft auf einem anderen Stand
+// 🔴 Nur EIN Handy im Raum darf zuhoeren. Gemessen an zwei Geraeten: hoerten beide
+// zu und erkannte eines die Sprache spaeter, wurde JEDER Wurf DOPPELT gebucht -
+// 160 Punkte statt 90, ohne jede Warnung. Das ist nicht filterbar, es ist
+// strukturell: zwei Mikros hoeren dieselbe Ansage. Also hoert nur eins.
+var syncHoert = null;         // Kennung des Geraets, das gerade zuhoert
+var syncEmpfangsNr = 0;       // zaehlt Empfaenge - gegen ein Wettrennen, siehe unten
 
 function syncCode(){
   // Ohne I/O/1/0: die werden auf einem Handybildschirm dauernd verwechselt.
@@ -507,6 +513,7 @@ function syncTopic(code){ return "darts-" + String(code).toLowerCase(); }
 // Verlauf, Statistik und Einstellungen bleiben auf jedem Handy privat.
 function syncPaket(){
   return { v:1, uhr:syncUhr, von:syncGeraeteId(),
+           hoert: (typeof voiceOn !== "undefined" && voiceOn) ? syncGeraeteId() : null,
            match: state.match ? JSON.parse(JSON.stringify(state.match)) : null };
 }
 
@@ -516,6 +523,7 @@ function syncSenden(){
   syncUhr++;
   var jetzt = JSON.stringify(state.match || null);
   syncVersucht = jetzt;
+  var nr = syncEmpfangsNr;
   var body = JSON.stringify(syncPaket());
   var f = syncFetch || (typeof fetch === "function" ? fetch : null);
   if(!f) return false;
@@ -528,7 +536,11 @@ function syncSenden(){
       // verhindert, dass render() dieselbe Aenderung ein zweites Mal losschickt.
       // syncZuletzt wird erst bei Erfolg gesetzt - nur so laesst sich erkennen,
       // dass eigene Wuerfe nie beim anderen Handy angekommen sind.
-      .then(function(){ syncZuletzt = jetzt; },
+      // Nur setzen, wenn zwischenzeitlich NICHTS empfangen wurde: sonst schreibt
+      // eine spaet eintreffende Sendebestaetigung den Merker auf einen Stand
+      // zurueck, den es nicht mehr gibt - und der naechste Empfang meldet
+      // faelschlich "deine Eingaben wurden ueberschrieben".
+      .then(function(){ if(nr === syncEmpfangsNr) syncZuletzt = jetzt; },
             function(){ syncStatus = "fehler"; syncVersucht = null; });
   }catch(e){ syncStatus = "fehler"; return false; }
   return true;
@@ -542,6 +554,29 @@ function syncUebernehmen(paket){
   // auf dem Schirm sah das aus wie "der Sync ist kaputt".
   if(paket.v !== 1){ syncFremdeVersion = true; render(); return "version"; }
   if(paket.von === syncGeraeteId()) return "eigenes";       // das eigene Echo
+  // Die Hoheit gilt UNABHAENGIG davon, ob der Spielstand uebernommen wird. Sonst
+  // bliebe ein zweites Mikro an, nur weil sein Paket gerade zu alt war.
+  if(Object.prototype.hasOwnProperty.call(paket, "hoert")){
+    var fremd = paket.hoert || null;
+    if(fremd && fremd !== syncGeraeteId() && typeof voiceOn !== "undefined" && voiceOn){
+      // Beide hoeren zu - ein Rennen. Gemessen, als beide einfach nachgaben:
+      // danach war auf BEIDEN das Mikro aus und die Hoheit frei, also buchte
+      // wieder jeder. Deshalb deterministisch: die groessere Kennung behaelt das
+      // Mikro, und beide Seiten entscheiden dasselbe.
+      if(fremd > syncGeraeteId()){
+        stopVoice();
+        syncHoert = fremd;
+        voiceMsg = "Das andere Handy hört zu &ndash; hier ist das Mikro aus, "
+                 + "damit kein Wurf doppelt zählt.";
+        render();
+      }else{
+        syncHoert = syncGeraeteId();     // wir behalten es und sagen es nochmal
+        hoheitMelden();
+      }
+    }else{
+      syncHoert = fremd;
+    }
+  }
   // Aelteres darf Neueres NIE ueberschreiben. Bei Gleichstand entscheidet die
   // Geraete-Kennung - Hauptsache beide Seiten entscheiden gleich.
   // Wer beitritt, hat noch kein Spiel und funkt einen LEEREN Stand. Ohne diese
@@ -563,6 +598,7 @@ function syncUebernehmen(paket){
   if(syncZuletzt !== null && JSON.stringify(state.match || null) !== syncZuletzt)
     syncVerworfen = true;
   syncEmpfangend = true;
+  syncEmpfangsNr++;
   try{
     syncUhr = paket.uhr;
     verlaufNachtragen(paket.match);      // vor dem Setzen: gleich ist es weg
@@ -640,8 +676,24 @@ function syncSchliessen(){
   if(syncES){ try{ syncES.close(); }catch(e){} }
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
   syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
+  syncHoert = null;
 }
 function syncAn(){ return !!syncRaum; }
+
+// Hoert DIESES Handy zu? Ohne zweites Handy immer, sonst nur wenn kein anderes
+// die Hoheit hat.
+// Das Ein- und Ausschalten muss beim anderen Handy ankommen, sonst weiss es
+// nicht, dass es sein Mikro zumachen soll. Eine Hoheit, die niemand erfaehrt,
+// ist keine.
+function hoheitMelden(){
+  if(syncAn()) syncSenden();
+}
+
+function hoertZu(){
+  if(typeof voiceOn === "undefined" || !voiceOn) return false;
+  if(!syncAn()) return true;
+  return !syncHoert || syncHoert === syncGeraeteId();
+}
 
 // Der Zustand der Leitung wird GEMESSEN, nicht mitgeschrieben. Gemessen am
 // 29.08.: nach einem Netzabbruch blieb der Merker auf "fehler" stehen, waehrend
@@ -2838,6 +2890,13 @@ function ensureRecog(){
 }
 function startVoice(){
   if(!SR){ voiceMsg="Sprache: dieser Browser kann es nicht (Chrome/Android nutzen)."; return; }
+  // Nur EIN Mikro im Raum. Wer nachtraeglich einschalten will, waehrend drueben
+  // schon gehoert wird, bekommt eine Ansage statt eines zweiten Mikros - sonst
+  // zaehlt jeder Wurf doppelt.
+  if(syncAn() && syncHoert && syncHoert !== syncGeraeteId()){
+    voiceMsg = "Das andere Handy hört gerade zu. Dort erst das Mikro ausschalten.";
+    render(); return;
+  }
   if(voiceOn) return;
   ensureRecog();
   voiceOn=true; voiceMsg="";
@@ -2849,12 +2908,14 @@ function startVoice(){
     voiceMsg="Mikrofon startet nicht &ndash; nochmal tippen.";
     render(); return;
   }
+  hoheitMelden();                                        // das andere Handy macht sein Mikro zu
   say("Sprachmodus an. Sag deine Würfe.");               // entsperrt zugleich iOS-Sprachausgabe
 }
 function stopVoice(){
   voiceOn=false;
   if(recog){ try{ recog.abort(); }catch(e){} }
   try{ if("speechSynthesis" in window) speechSynthesis.cancel(); }catch(e){}
+  hoheitMelden();          // gibt das Mikro fuer das andere Handy wieder frei
 }
 function updateVoiceStatus(msg){
   if(typeof msg==="string") voiceMsg=msg;
@@ -3035,6 +3096,10 @@ function applySpokenResult(p, rawTxt){
 }
 function applySpokenResultInner(p, rawTxt){
   var m=state.match; if(!m || m.finished) return;
+  // 🔴 Ein zweites Mikro im selben Raum hoert DIESELBE Ansage. Wer nicht die
+  // Hoheit hat, bucht nicht - sonst zaehlt jeder Wurf doppelt. Die Pruefung sitzt
+  // hier und nicht im Mikro-Zweig, damit sie fuer jeden Weg ins Spiel gilt.
+  if(syncAn() && syncHoert && syncHoert !== syncGeraeteId()) return;
 
   // Eine Korrektur laeuft: die naechste Ansage ist der Ersatzwurf.
   if(korrigiere){
@@ -3536,6 +3601,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
+  hoertZu:hoertZu, syncHoertWer:function(){ return syncHoert; },
   pruefeVersion:pruefeVersion, version:function(){ return VER; },
   setVersionsPruefer:function(f){ versionsPruefer = f; neuereVersion = null; },
   syncNachfassen:syncNachfassen,
@@ -3551,7 +3617,8 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   h2h:h2h, allDuels:allDuels, streakOf:streakOf, nameOf:nameOf, gameHead:gameHead,
   meId:meId, orderPair:orderPair, importText:importText, restoreView:restoreView,
   setSR:function(x){ SR=x; recog=null; }, nameOf:nameOf, idBelegt:idBelegt,
-  setVoiceOn:function(v){ voiceOn=!!v; }, wartetAufOk:wartetAufOk,
+  setVoiceOn:function(v){ voiceOn=!!v; hoheitMelden(); },
+  istVoiceOn:function(){ return !!voiceOn; }, setSyncHoert:function(h){ syncHoert=h; }, wartetAufOk:wartetAufOk,
   ansageBrauchbar:ansageBrauchbar, hoerEreignis:hoerEreignis, istWurfWort:istWurfWort,
   besteAlternative:besteAlternative, ueberhoertZahl:function(){ return ueberhoert; },
   getRecog:function(){ return recog; }, ensureRecog:ensureRecog,

@@ -1187,6 +1187,167 @@ t("Ohne Verlauf-Schalter wird auch nichts nachgetragen", () => {
   eq(D.getState().history.length, 0, "wer nicht mitschreiben will, will auch das nicht");
 });
 
+t("Nur EIN Handy im Raum hoert zu", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("AAAA");          // kleinere Kennung: gibt im Rennen nach
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  ok(D.hoertZu(), "erst hoert dieses Handy");
+  // Gemessen an zwei echten Geraeten: hoerten beide zu und erkannte eines die
+  // Sprache spaeter, wurde JEDER Wurf doppelt gebucht - 160 Punkte statt 90,
+  // ohne jede Warnung. Zwei Mikros fuer dieselbe Ansage ergeben keinen Sinn.
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ZZZZ", match: fremd, hoert: "ZZZZ" });
+  ok(!D.hoertZu(), "sobald das andere Handy hoert, geht das eigene Mikro aus");
+  // Getrennt pruefen: die beiden Mechanismen decken sich sonst gegenseitig ab.
+  // Faellt stopVoice() weg, rettet hoertZu() den Test - und umgekehrt. Gemessen:
+  // beide Rot-Proben fingen nichts.
+  eq(D.istVoiceOn(), false, "das Mikro muss WIRKLICH aus sein, nicht nur stumm gerechnet");
+  D.setView("game"); D.render();
+  const status = ctx.els.voiceStatus.innerHTML || "";
+  ok(/andere Handy/i.test(status), "und es muss dastehen, warum: " + status);
+});
+
+t("Im Rennen gibt genau EINE Seite nach", () => {
+  // Gemessen, als beide einfach nachgaben: danach war auf BEIDEN das Mikro aus
+  // und die Hoheit frei - also buchte wieder jeder, und der Wurf zaehlte doppelt.
+  const ergebnis = [];
+  for (const [ich, andere] of [["AAAA", "ZZZZ"], ["ZZZZ", "AAAA"]]) {
+    const ctx = syncBoot();
+    const D = ctx.D;
+    D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+    D.setSyncGeraet(ich);
+    D.syncOeffnen("ABC123");
+    D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    D.setVoiceOn(true);
+    const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+    D.syncUebernehmen({ v: 1, uhr: 9999, von: andere, match: fremd, hoert: andere });
+    ergebnis.push(D.istVoiceOn());
+  }
+  ok(ergebnis[0] !== ergebnis[1],
+     "genau eine Seite behaelt das Mikro, nicht beide und nicht keine: " + JSON.stringify(ergebnis));
+  eq(ergebnis[1], true, "die groessere Kennung behaelt es");
+});
+
+t("hoertZu() achtet auf die Hoheit, auch wenn das Mikro noch an ist", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("MEINS");
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  // Der Zustand zwischen Empfang und Abschalten - und der Fall, dass das
+  // Abschalten aus irgendeinem Grund nicht greift.
+  D.setSyncHoert("ANDERES");
+  eq(D.istVoiceOn(), true, "das Mikro ist hier noch an");
+  ok(!D.hoertZu(), "gezaehlt werden darf trotzdem nichts");
+});
+
+t("Ohne Hoheit wird eine Ansage NICHT gebucht", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("MEINS");
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setSyncHoert("ANDERES");                 // das andere Handy hat das Mikro
+  // Genau hier lag der Fehler: die Hoheit stand, aber niemand fragte sie ab.
+  // Gemessen an zwei Geraeten: 140 Punkte statt 90, weil beide weiter buchten.
+  D.applySpokenResult(D.parseSpeech("triple 20", []), "triple 20");
+  eq(D.getMatch().players[0].score, 501, "der Wurf gehoert dem anderen Handy");
+  eq(D.getMatch().currentTurn.length, 0);
+  // Und ueber den Mikro-Weg genauso.
+  D.hoerEreignis("triple 20", 0.9);
+  eq(D.getMatch().players[0].score, 501, "auf BEIDEN Wegen, nicht nur auf einem");
+});
+
+t("Mit Hoheit wird normal gebucht", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("MEINS");
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.setSyncHoert("MEINS");
+  D.applySpokenResult(D.parseSpeech("triple 20", []), "triple 20");
+  eq(D.getMatch().players[0].score, 441, "wer die Hoheit hat, bucht ganz normal");
+});
+
+t("Wer das Mikro einschaltet, sagt es dem anderen", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("MEINS");
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.gesendet.length = 0;
+  D.setVoiceOn(true);
+  const letzte = ctx.gesendet[ctx.gesendet.length - 1];
+  ok(letzte, "das Einschalten geht raus");
+  eq(letzte.body.hoert, "MEINS", "mit der eigenen Kennung");
+});
+
+t("Mikro aus gibt die Hoheit wieder frei", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("MEINS");
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  // Ueber den KNOPF, nicht ueber den Test-Setter: der meldet die Hoheit selbst
+  // und deckt damit zu, ob stopVoice() es auch tut. Gemessen: die Rot-Probe
+  // fing nichts, weil der Test den echten Weg nie ging.
+  D.setView("game"); D.render();
+  ctx.click("voice");
+  eq(D.istVoiceOn(), true, "das Mikro ist an");
+  ctx.gesendet.length = 0;
+  ctx.click("voice");
+  eq(D.istVoiceOn(), false, "und wieder aus");
+  const letzte = ctx.gesendet[ctx.gesendet.length - 1];
+  ok(letzte, "auch das Ausschalten geht raus");
+  ok(!letzte.body.hoert, "und gibt frei: " + JSON.stringify(letzte.body.hoert));
+});
+
+t("Ohne zweites Handy gilt keine Hoheit", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  ok(D.hoertZu(), "wer allein spielt, wird von niemandem verdraengt");
+});
+
+t("Eine spaete Sendebestaetigung loest keinen Fehlalarm aus", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  let aufloesen = null;
+  // Ein Transport, dessen Bestaetigung erst kommt, wenn ICH sie auslöse.
+  D.setSyncTransport(() => new Promise(r => { aufloesen = r; }),
+    function () { this.readyState = 1; this.close = () => {}; });
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);                       // geht raus, Bestaetigung haengt
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 301;
+  D.syncUebernehmen({ v: 1, uhr: 5000, von: "ANDERES", match: fremd });
+  aufloesen({ ok: true });                  // JETZT erst kommt die Bestaetigung
+  await null; await null;
+  // Sie darf den Merker nicht auf einen Stand zurueckschreiben, den es nicht
+  // mehr gibt - sonst meldet der naechste Empfang faelschlich einen Verlust.
+  const noch = JSON.parse(JSON.stringify(D.getMatch()));
+  noch.players[0].score = 250;
+  D.syncUebernehmen({ v: 1, uhr: 6000, von: "ANDERES", match: noch });
+  D.setView("game"); D.render();
+  ok(!/überschrieben/i.test(ctx.app.innerHTML),
+     "hier ist nichts von diesem Handy verloren gegangen: " + ctx.app.innerHTML.slice(-200));
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
