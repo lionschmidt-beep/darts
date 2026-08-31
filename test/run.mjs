@@ -1674,6 +1674,62 @@ t("Der Schluessel-Hinweis bleibt, wenn der Code da ist", () => {
      "und erst recht, wenn es einen Code zu schuetzen gibt");
 });
 
+t("Man sieht, wie viele Geraete im Raum sind", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSyncGeraet("ICH");
+  D.syncOeffnen("ABC123");
+  eq(D.syncGeraeteZahl(), 1, "erst nur das eigene");
+  D.syncUebernehmen({ v: 1, uhr: 1, von: "ZWEI", match: null, hallo: true });
+  eq(D.syncGeraeteZahl(), 2, "das zweite Handy hat sich gemeldet");
+  D.syncUebernehmen({ v: 1, uhr: 2, von: "ZWEI", match: null, hallo: true });
+  eq(D.syncGeraeteZahl(), 2, "dasselbe Handy zaehlt nicht doppelt");
+  D.setView("settings"); D.render();
+  ok(/2 Geräte|2 Handys/.test(ctx.app.innerHTML), "und es steht da");
+});
+
+t("Ein DRITTES Geraet wird deutlich gemeldet", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSyncGeraet("ICH");
+  D.syncOeffnen("ABC123");
+  D.syncUebernehmen({ v: 1, uhr: 1, von: "ZWEI", match: null, hallo: true });
+  D.setView("settings"); D.render();
+  ok(!/Fremd|drittes|Unbekannt/i.test(ctx.app.innerHTML), "zu zweit ist alles normal");
+  // Gemessen in der Nutzer-Pruefung: ein drittes Handy tippte den Code ein und
+  // sah nach 3 Sekunden das komplette laufende Spiel - und WEDER A NOCH B
+  // bekamen davon irgendetwas mit. Es konnte ihnen sogar das Mikro abnehmen.
+  D.syncUebernehmen({ v: 1, uhr: 3, von: "DREI", match: null, hallo: true });
+  eq(D.syncGeraeteZahl(), 3);
+  D.setView("settings"); D.render();
+  ok(/3 Geräte/.test(ctx.app.innerHTML), "die Zahl stimmt");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(/3 Geräte|Dritte|dritte/.test(ctx.app.innerHTML),
+     "und im SPIEL muss es auffallen, nicht nur in den Einstellungen");
+});
+
+t("Ein Geraet, das lange still ist, zaehlt nicht mehr mit", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSyncGeraet("ICH");
+  D.syncOeffnen("ABC123");
+  D.syncUebernehmen({ v: 1, uhr: 1, von: "ZWEI", match: null, hallo: true });
+  eq(D.syncGeraeteZahl(), 2);
+  D.setGeraetGesehen("ZWEI", Date.now() - 11 * 60000);   // 11 Minuten still
+  eq(D.syncGeraeteZahl(), 1, "wer zehn Minuten nichts sagt, ist vermutlich weg");
+});
+
+t("Trennen setzt die Geraeteliste zurueck", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.syncUebernehmen({ v: 1, uhr: 1, von: "ZWEI", match: null, hallo: true });
+  D.syncSchliessen();
+  D.syncOeffnen("XYZ789");
+  eq(D.syncGeraeteZahl(), 1, "im neuen Raum ist man erstmal allein");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;

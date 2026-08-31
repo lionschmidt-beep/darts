@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.43";
+var VER    = "1.44";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -481,6 +481,15 @@ var syncSendefehler = false;  // ging ein Versuch daneben, ohne je bestaetigt zu
 // Mikro-Sperre galt fuer immer weiter, wenn dem anderen der Akku ausging.
 var syncGehoert = 0;
 var syncSeit = 0;             // wann wurde der Raum geoeffnet
+// Wer ist ausser mir im Raum? Gemessen in einer Nutzer-Pruefung: ein drittes
+// Handy tippte den Code ein, sah nach drei Sekunden das komplette laufende Spiel -
+// und WEDER der eine noch der andere bekam etwas davon mit. Es konnte ihnen sogar
+// das Mikro abnehmen. Der Code ist der einzige Schutz; dann muss man wenigstens
+// sehen, wer ihn benutzt.
+// ⚠️ Grenze, die bleibt: ein Geraet, das NUR zuhoert und nie sendet, ist hier
+// unsichtbar. Das ist eine Eigenschaft des offenen Dienstes, kein Fehler der App.
+var syncGeraete = {};         // Kennung -> wann zuletzt gehoert
+var GERAET_HAELT = 10 * 60000;
 var SYNC_STILL = 15000;       // so lange darf es still sein, bevor "allein" gilt
 var SYNC_HOHEIT_HAELT = 60000; // so lange gilt eine fremde Mikro-Hoheit nach
 var syncRaum = null;          // Raumcode oder null
@@ -612,6 +621,7 @@ function syncUebernehmen(paket){
   if(paket.v !== 1){ syncFremdeVersion = true; render(); return "version"; }
   if(paket.von === syncGeraeteId()) return "eigenes";       // das eigene Echo
   syncGehoert = Date.now();          // jemand ist da - das ist der Beweis
+  if(paket.von) syncGeraete[paket.von] = syncGehoert;
   // Wenn Daten hereinkommen, steht die Leitung - egal was ein alter Sendefehler
   // behauptet. Gemessen: das Netz war laengst wieder da, der Stand aktualisierte
   // sich live vor den Augen des Nutzers, und die Pille sagte weiter "keine
@@ -767,8 +777,18 @@ function syncSchliessen(){
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
   syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
   syncHoert = null; syncZuGross = 0; syncSendefehler = false; syncGehoert = 0;
+  syncGeraete = {};
 }
 function syncAn(){ return !!syncRaum; }
+
+// Wie viele Handys haben sich zuletzt gemeldet - eigenes mitgezaehlt.
+function syncGeraeteZahl(){
+  if(!syncAn()) return 0;
+  var n = 1, jetzt = Date.now();
+  for(var k in syncGeraete)
+    if(k !== syncGeraeteId() && (jetzt - syncGeraete[k]) < GERAET_HAELT) n++;
+  return n;
+}
 
 // Hoert DIESES Handy zu? Ohne zweites Handy immer, sonst nur wenn kein anderes
 // die Hoheit hat.
@@ -2339,8 +2359,21 @@ function eigeneId(spieler){
   return addPlayer(spieler.name, true) || spieler.id;     // unbekannt: als Gast
 }
 
+// Wie viele Handys hoeren mit? Ab drei ist einer davon nicht eingeladen - das
+// muss auffallen und nicht nur in den Einstellungen stehen.
+function geraeteText(){
+  var n = syncGeraeteZahl();
+  if(n <= 1) return "1 Gerät";
+  return n + " Geräte";
+}
+
 function syncPille(){
   if(!syncAn()) return "";
+  var nG = syncGeraeteZahl();
+  var fremd = nG > 2
+    ? '<div class="warnzeile">&#9888;&#65039; <b>' + nG + ' Geräte</b> in dieser Runde &ndash; '
+      + 'da ist eins zu viel. Wer den Code hat, sieht mit. Notfalls trennen und neu öffnen.</div>'
+    : "";
   // Die Warnung ERSETZT die Pille nicht - sonst sieht man im wichtigsten Moment
   // nicht mehr, ob ueberhaupt noch eine Verbindung steht und zu welchem Raum.
   var warn = syncZuGross
@@ -2359,7 +2392,7 @@ function syncPille(){
   var txt = lage === "offen" ? "&#128241; " + esc(syncRaum)
           : lage === "verbinde" ? "&#128241; verbindet &hellip;"
           : "&#128241; " + esc(syncRaum) + " &ndash; keine Verbindung";
-  return warn + '<div class="' + kl + '">' + txt + '</div>';
+  return fremd + warn + '<div class="' + kl + '">' + txt + '</div>';
 }
 
 function syncBlock(){
@@ -2372,7 +2405,8 @@ function syncBlock(){
             : '<span class="muted">verbinde …</span>';
     return '<div class="syncbox">'
       + '<div class="synccode">' + esc(syncRaum) + '</div>'
-      + '<div class="sublbl">Auf dem anderen Handy diesen Code eintippen. ' + wie + '</div>'
+      + '<div class="sublbl">Auf dem anderen Handy diesen Code eintippen. ' + wie
+      +   ' &middot; ' + geraeteText() + '</div>'
       + '<div class="stack" style="margin-top:10px">'
       +   '<button class="btn" data-act="sync_aus">Verbindung trennen</button>'
       + '</div>'
@@ -3725,6 +3759,8 @@ document.getElementById("app").addEventListener("click", function(ev){
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
   hoertZu:hoertZu, syncHoertWer:function(){ return syncHoert; },
+  syncGeraeteZahl:syncGeraeteZahl,
+  setGeraetGesehen:function(k,t){ syncGeraete[k] = t; },
   setLetztesLebenszeichen:function(t){ syncGehoert = t; },
   setRaumSeit:function(t){ syncSeit = t; },
   syncHallo:syncHallo,
