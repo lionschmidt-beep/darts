@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.41";
+var VER    = "1.42";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -475,6 +475,14 @@ var SYNC_HOST = "https://ntfy.sh/";
 var SYNC_MAX = 4000;          // gemessene Zustellgrenze, siehe syncSenden()
 var syncZuGross = 0;          // Bytes des Pakets, das nicht rausging
 var syncSendefehler = false;  // ging ein Versuch daneben, ohne je bestaetigt zu sein?
+// Wann kam zuletzt IRGENDETWAS vom anderen Handy? Ohne diese Uhr meldete die App
+// nach dem Beitreten "verbunden", auch wenn der Code falsch war und niemand da -
+// man wartet dann minutenlang, warum drueben nichts ankommt. Und eine
+// Mikro-Sperre galt fuer immer weiter, wenn dem anderen der Akku ausging.
+var syncGehoert = 0;
+var syncSeit = 0;             // wann wurde der Raum geoeffnet
+var SYNC_STILL = 15000;       // so lange darf es still sein, bevor "allein" gilt
+var SYNC_HOHEIT_HAELT = 60000; // so lange gilt eine fremde Mikro-Hoheit nach
 var syncRaum = null;          // Raumcode oder null
 var syncES = null;            // die offene Verbindung
 var syncUhr = 0;              // zaehlt hoch bei JEDER lokalen Aenderung
@@ -534,6 +542,21 @@ function syncPaket(){
            match: m };
 }
 
+// Ein Lebenszeichen ohne Spielstand. Wer beitritt, hat noch kein Spiel und wuerde
+// sonst gar nichts senden - das andere Handy erfaehrt nie, dass jemand da ist,
+// und der Beitretende sieht nie, ob der Code stimmt.
+function syncHallo(){
+  if(!syncRaum) return false;
+  var f = syncFetch || (typeof fetch === "function" ? fetch : null);
+  if(!f) return false;
+  var body = JSON.stringify({ v:1, uhr:syncUhr, von:syncGeraeteId(), hallo:true,
+    hoert: (typeof voiceOn !== "undefined" && voiceOn) ? syncGeraeteId() : null,
+    match:null });
+  try{ f(SYNC_HOST + syncTopic(syncRaum), { method:"POST", body:body })
+        .then(function(){}, function(){}); }catch(e){ return false; }
+  return true;
+}
+
 function syncSenden(){
   if(!syncRaum || syncEmpfangend) return false;
   syncVerworfen = false;          // wer weiterspielt, hat die Meldung gesehen
@@ -588,6 +611,10 @@ function syncUebernehmen(paket){
   // auf dem Schirm sah das aus wie "der Sync ist kaputt".
   if(paket.v !== 1){ syncFremdeVersion = true; render(); return "version"; }
   if(paket.von === syncGeraeteId()) return "eigenes";       // das eigene Echo
+  syncGehoert = Date.now();          // jemand ist da - das ist der Beweis
+  // Wer sich meldet, bekommt den laufenden Stand. Ohne diese Antwort sieht ein
+  // Beitretender nichts, bis der andere zufaellig etwas tut.
+  if(paket.hallo && state.match && !syncEmpfangend) syncSenden();
   // Die Hoheit gilt UNABHAENGIG davon, ob der Spielstand uebernommen wird. Sonst
   // bliebe ein zweites Mikro an, nur weil sein Paket gerade zu alt war.
   if(Object.prototype.hasOwnProperty.call(paket, "hoert")){
@@ -692,6 +719,7 @@ function syncOeffnen(code){
   syncSchliessen();
   raumMerken(code);
   syncRaum = code;
+  syncGehoert = 0; syncSeit = Date.now();   // noch nichts gehoert = "wartet"
   syncStatus = "verbinde";
   var Q = syncQuelle || (typeof EventSource === "function" ? EventSource : null);
   if(!Q){ syncStatus = "fehler"; return false; }
@@ -710,6 +738,10 @@ function syncOeffnen(code){
       syncUebernehmen(paket);
     };
   }catch(e){ syncStatus = "fehler"; return false; }
+  // Sich melden gehoert HIERHER und nicht in den Knopf-Handler: sonst haengt
+  // das Lebenszeichen daran, ueber welchen Weg der Raum geoeffnet wurde - und
+  // ein nach dem Neustart wiederhergestellter Raum meldet sich nie.
+  if(state.match) syncSenden(); else syncHallo();
   return true;
 }
 // Der Haken in save() ist der schnelle Weg. Er haengt aber daran, dass jeder
@@ -729,7 +761,7 @@ function syncSchliessen(){
   if(syncES){ try{ syncES.close(); }catch(e){} }
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
   syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
-  syncHoert = null; syncZuGross = 0; syncSendefehler = false;
+  syncHoert = null; syncZuGross = 0; syncSendefehler = false; syncGehoert = 0;
 }
 function syncAn(){ return !!syncRaum; }
 
@@ -745,7 +777,17 @@ function hoheitMelden(){
 function hoertZu(){
   if(typeof voiceOn === "undefined" || !voiceOn) return false;
   if(!syncAn()) return true;
-  return !syncHoert || syncHoert === syncGeraeteId();
+  return !fremdeHoheit();
+}
+
+// Hoert ein ANDERES Handy? Gemessen: ging dem anderen der Akku aus, blieb das
+// Mikro hier fuer immer gesperrt - auch nach einem Neuladen, weil ntfy die alte
+// Nachricht per since=15m wieder auslieferte. Rauskommen nur ueber "Verbindung
+// trennen", und da sucht niemand.
+function fremdeHoheit(){
+  if(!syncHoert || syncHoert === syncGeraeteId()) return false;
+  if(syncGehoert && (Date.now() - syncGehoert) > SYNC_HOHEIT_HAELT) return false;
+  return true;
 }
 
 // Der Zustand der Leitung wird GEMESSEN, nicht mitgeschrieben. Gemessen am
@@ -763,9 +805,16 @@ function syncLage(){
   // Ein Sendefehler schlaegt durch, auch wenn die EMPFANGS-Leitung offen ist:
   // beides sind getrennte Wege, und "verbunden" waere gelogen, wenn nichts rausgeht.
   if(syncStatus === "fehler") return "fehler";
-  if(typeof syncES.readyState !== "number") return syncStatus;   // fremde Attrappe
-  return syncES.readyState === 1 ? "offen"
-       : syncES.readyState === 0 ? "verbinde" : "fehler";
+  if(typeof syncES.readyState === "number"){
+    if(syncES.readyState === 2) return "fehler";
+    if(syncES.readyState === 0) return "verbinde";     // die Leitung steht noch nicht
+  }
+  // Die Leitung kann offen sein und trotzdem niemand da: ein falscher Code
+  // verbindet sich sauber mit einem leeren Raum. Deshalb zaehlt, ob je etwas
+  // vom anderen Handy kam.
+  if(!syncGehoert)
+    return (Date.now() - syncSeit) > SYNC_STILL ? "allein" : "wartet";
+  return "offen";
 }
 
 function save(){
@@ -2311,8 +2360,10 @@ function syncPille(){
 function syncBlock(){
   if(syncAn()){
     var lage = syncLage();
-    var wie = lage === "offen"  ? '<span class="ok">verbunden</span>'
-            : lage === "fehler" ? '<span class="bad">keine Verbindung</span>'
+    var wie = lage === "offen"   ? '<span class="ok">verbunden</span>'
+            : lage === "fehler"  ? '<span class="bad">keine Verbindung</span>'
+            : lage === "wartet"  ? '<span class="muted">warte auf das andere Handy …</span>'
+            : lage === "allein"  ? '<span class="bad">niemand da &ndash; Code prüfen</span>'
             : '<span class="muted">verbinde …</span>';
     return '<div class="syncbox">'
       + '<div class="synccode">' + esc(syncRaum) + '</div>'
@@ -2953,7 +3004,7 @@ function startVoice(){
   // Nur EIN Mikro im Raum. Wer nachtraeglich einschalten will, waehrend drueben
   // schon gehoert wird, bekommt eine Ansage statt eines zweiten Mikros - sonst
   // zaehlt jeder Wurf doppelt.
-  if(syncAn() && syncHoert && syncHoert !== syncGeraeteId()){
+  if(syncAn() && fremdeHoheit()){
     voiceMsg = "Das andere Handy hört gerade zu. Dort erst das Mikro ausschalten.";
     render(); return;
   }
@@ -3159,7 +3210,7 @@ function applySpokenResultInner(p, rawTxt){
   // 🔴 Ein zweites Mikro im selben Raum hoert DIESELBE Ansage. Wer nicht die
   // Hoheit hat, bucht nicht - sonst zaehlt jeder Wurf doppelt. Die Pruefung sitzt
   // hier und nicht im Mikro-Zweig, damit sie fuer jeden Weg ins Spiel gilt.
-  if(syncAn() && syncHoert && syncHoert !== syncGeraeteId()) return;
+  if(syncAn() && fremdeHoheit()) return;
 
   // Eine Korrektur laeuft: die naechste Ansage ist der Ersatzwurf.
   if(korrigiere){
@@ -3347,6 +3398,7 @@ document.getElementById("app").addEventListener("click", function(ev){
     syncMsg = "";
     if(!syncOeffnen(syncCode())) syncMsg = "Dieses Handy kann keine Verbindung aufbauen.";
     else if(state.match) syncSenden();       // der Beitretende soll sofort den Stand sehen
+    else syncHallo();
     render(); return;
   }
   if(act==="sync_bei"){
@@ -3356,6 +3408,7 @@ document.getElementById("app").addEventListener("click", function(ev){
     syncMsg = "";
     if(!syncOeffnen(code)) syncMsg = "Dieses Handy kann keine Verbindung aufbauen.";
     else if(state.match) syncSenden();       // nur wer selbst etwas hat, meldet sich mit Stand
+    else syncHallo();                        // sonst wenigstens ein Lebenszeichen
     render(); return;
   }
   if(act==="sync_aus"){ syncSchliessen(); syncMsg = ""; render(); return; }
@@ -3662,6 +3715,9 @@ document.getElementById("app").addEventListener("click", function(ev){
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
   hoertZu:hoertZu, syncHoertWer:function(){ return syncHoert; },
+  setLetztesLebenszeichen:function(t){ syncGehoert = t; },
+  setRaumSeit:function(t){ syncSeit = t; },
+  syncHallo:syncHallo,
   pruefeVersion:pruefeVersion, version:function(){ return VER; },
   setVersionsPruefer:function(f){ versionsPruefer = f; neuereVersion = null; },
   syncNachfassen:syncNachfassen,

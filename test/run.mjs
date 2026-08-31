@@ -815,12 +815,17 @@ t("Ein beitretendes Handy loescht die laufende Runde NICHT", () => {
   eq(D.getMatch().players[0].score, 441);
 });
 
-t("Wer selbst nichts hat, funkt auch nichts", () => {
+t("Wer selbst nichts hat, funkt keinen LEEREN Spielstand", () => {
   const ctx = syncBoot();
   const D = ctx.D;
   D.syncOeffnen("ABC123");          // kein Spiel offen
   D.render(); D.render();
-  eq(ctx.gesendet.length, 0, "sonst loescht das Beitreten die fremde Runde");
+  // Ein Lebenszeichen (hallo) ist erlaubt und noetig - sonst weiss das andere
+  // Handy nie, dass jemand da ist. Was NICHT rausgehen darf, ist ein Paket, das
+  // druebe als Spielstand gilt und die laufende Runde loescht.
+  const echteStaende = ctx.gesendet.filter(g => !g.body.hallo);
+  eq(echteStaende.length, 0, "kein Spielstand ohne Spiel");
+  ok(ctx.gesendet.every(g => g.body.match === null), "und in keinem Paket ein Match");
 });
 
 t("Ein leerer Stand gilt, wenn selbst nichts laeuft", () => {
@@ -842,6 +847,7 @@ t("Der Verbindungsstand wird gemessen, nicht mitgeschrieben", () => {
   D.syncOeffnen("ABC123");
   eq(D.syncStand().status, "verbinde", "readyState 0 = verbindet noch");
   es.readyState = 1;
+  D.setLetztesLebenszeichen(Date.now());   // ohne Lebenszeichen gilt "wartet"
   eq(D.syncStand().status, "offen", "readyState 1 = offen");
   es.readyState = 2;
   eq(D.syncStand().status, "fehler", "readyState 2 = zu");
@@ -857,6 +863,7 @@ t("Ein offenes Geraet ohne Netz meldet sich als getrennt", () => {
   function FakeES(u){ this.readyState = 1; this.close = function(){}; }
   D.setSyncTransport(() => Promise.resolve({ok:true}), FakeES);
   D.syncOeffnen("ABC123");
+  D.setLetztesLebenszeichen(Date.now());   // jemand ist da
   eq(D.syncLage(), "offen");
   // Gemessen: readyState blieb 1, waehrend das Geraet offline war - die Anzeige
   // sagte "verbunden", obwohl nichts mehr ankam.
@@ -1534,6 +1541,72 @@ t("Ein empfangenes Spiel steckt das andere Handy nicht an", () => {
   let err = null;
   try { D.applyDart(1, 5); } catch (e) { err = e.message; }
   eq(err, null, "auch nach mehreren Runden hin und her: " + err);
+});
+
+t("Ein falscher Code sagt nicht 'verbunden'", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("QQQQQQ");                  // Raum, in dem niemand ist
+  // Gemessen: die App meldete "verbunden", obwohl niemand da war. Man wartet
+  // dann fuenf Minuten, warum drueben nichts ankommt.
+  eq(D.syncLage(), "wartet", "solange kein Lebenszeichen kam: wartet, nicht verbunden");
+  D.setView("settings"); D.render();
+  ok(!/>verbunden</.test(ctx.app.innerHTML), "und es steht auch nicht da");
+  // Erst ein Paket vom anderen Handy macht daraus eine Verbindung.
+  D.syncUebernehmen({ v: 1, uhr: 5, von: "ANDERES", match: null, hallo: true });
+  eq(D.syncLage(), "offen", "jetzt ist wirklich wer da");
+});
+
+t("Nach einer Weile ohne Lebenszeichen wird es deutlich", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("QQQQQQ");
+  D.setLetztesLebenszeichen(0);                    // nie ein Lebenszeichen
+  D.setRaumSeit(Date.now() - 20000);               // und der Raum ist 20 s offen
+  eq(D.syncLage(), "allein", "nach 15 s ohne Antwort ist niemand da");
+  D.setView("settings"); D.render();
+  const box = (ctx.app.innerHTML.match(/<div class="syncbox">[\s\S]*?<\/div><\/div>/) || [""])[0];
+  ok(/niemand|allein|Code prüfen/i.test(box), "und das muss dastehen: " + box.slice(0, 300));
+});
+
+t("Wer beitritt, meldet sich - auch ohne eigenes Spiel", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  ctx.gesendet.length = 0;
+  D.syncOeffnen("ABC123");                  // kein Spiel offen
+  ok(ctx.gesendet.length > 0, "sonst weiss das andere Handy nie, dass wer da ist");
+  const p = ctx.gesendet[ctx.gesendet.length - 1].body;
+  eq(p.hallo, true, "als Lebenszeichen, nicht als Spielstand");
+  eq(p.match, null, "und ohne Match - sonst loescht es drueben die Runde");
+});
+
+t("Ein Hallo wird beantwortet", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  ctx.gesendet.length = 0;
+  D.syncUebernehmen({ v: 1, uhr: 1, von: "ANDERES", match: null, hallo: true });
+  ok(ctx.gesendet.length > 0, "wer ein Spiel hat, schickt es dem Neuen");
+  eq(ctx.gesendet[ctx.gesendet.length - 1].body.match.players[0].score, 441);
+});
+
+t("Die Mikro-Sperre verfaellt, wenn das andere Handy weg ist", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setSR(function () { this.start = function () {}; this.abort = function () {}; });
+  D.setSyncGeraet("AAAA");
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncUebernehmen({ v: 1, uhr: 9, von: "ZZZZ", match: null, hoert: "ZZZZ" });
+  ok(!D.hoertZu(), "erst hoert das andere");
+  // Gemessen: dem anderen Handy ging der Akku aus. Danach blieb das Mikro hier
+  // FUER IMMER gesperrt - auch nach einem Neuladen, weil ntfy die alte Nachricht
+  // per since=15m wieder auslieferte. Rauskommen nur ueber "Verbindung trennen".
+  D.setLetztesLebenszeichen(Date.now() - 70000);
+  D.setVoiceOn(true);
+  ok(D.hoertZu(), "nach einer Minute ohne Lebenszeichen ist das Mikro wieder frei");
 });
 
 t("Ohne Raum wird nichts gefunkt", () => {
