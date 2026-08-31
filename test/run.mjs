@@ -1609,6 +1609,71 @@ t("Die Mikro-Sperre verfaellt, wenn das andere Handy weg ist", () => {
   ok(D.hoertZu(), "nach einer Minute ohne Lebenszeichen ist das Mikro wieder frei");
 });
 
+t("Ankommende Daten loeschen den Fehlerzustand", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSyncTransport(() => Promise.resolve({ ok: false, status: 429 }),
+    function () { this.readyState = 1; this.close = () => {}; });
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  await null; await null; await null;
+  eq(D.syncLage(), "fehler");
+  // Gemessen: das Netz war laengst wieder da, der Spielstand aktualisierte sich
+  // LIVE vor den Augen des Nutzers - und die Pille sagte weiter "keine
+  // Verbindung", weil der Merker erst beim naechsten eigenen Senden verfiel.
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 300;
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  eq(D.syncLage(), "offen", "wenn Daten reinkommen, steht die Leitung");
+});
+
+t("Keine Verlustwarnung ohne eigene Eingabe", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSyncTransport(() => Promise.reject(new Error("weg")),
+    function () { this.readyState = 1; this.close = () => {}; });
+  D.syncOeffnen("ABC123");                 // nur ein Hallo, kein Spiel
+  await null; await null;
+  const fremd = { v:1, uhr:9, von:"ANDERES", hallo:false,
+    match:{ id:"x", ts:1, mode:"x01", gameType:501, doubleOut:true, bestOf:1,
+            players:[{id:"lion",name:"Lion",score:400,darts:3,legsWon:0,scored:101},
+                     {id:"arne",name:"Arne",score:501,darts:0,legsWon:0,scored:0}],
+            currentIdx:0, currentTurn:[], turnStartScore:400, legs:[], finished:false } };
+  D.syncUebernehmen(fremd);
+  D.setView("game"); D.render();
+  ok(!/überschrieben/i.test(ctx.app.innerHTML),
+     "der Nutzer hatte NULL Eingaben - die Warnung war frei erfunden");
+});
+
+t("Nach dem Oeffnen wird zum Code gescrollt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  let gescrollt = 0;
+  ctx.els.app.scrollIntoView = () => { gescrollt++; };
+  D.setView("settings"); D.render();
+  ctx.click("sync_neu");
+  // Gemessen: die Seite sprang nach oben, der Code lag bei 887 px auf einem
+  // 844-px-Schirm. Der Nutzer tippte zweimal, weil scheinbar nichts passierte.
+  ok(D.syncStand().raum, "der Raum ist offen");
+  ok(/synccode/.test(ctx.app.innerHTML), "und der Code steht im Block");
+});
+
+t("Der Schluessel-Hinweis bleibt, wenn der Code da ist", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.setView("settings"); D.render();
+  ok(/Schlüssel/.test(ctx.app.innerHTML), "vorher steht er da");
+  D.syncOeffnen("ABC123");
+  D.setView("settings"); D.render();
+  // Gemessen: genau in der Sekunde, in der der Code existiert, verschwand der
+  // Satz "Der Code ist der Schluessel" - also genau falsch herum.
+  // NICHT auf 'sieht eure Runde' mit-pruefen: dieser Halbsatz bleibt auch stehen,
+  // wenn der eigentliche Hinweis wegfaellt - der Test waere dann blind.
+  ok(/Der Code ist der Schlüssel/.test(ctx.app.innerHTML),
+     "und erst recht, wenn es einen Code zu schuetzen gibt");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;

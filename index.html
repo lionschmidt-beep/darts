@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.42";
+var VER    = "1.43";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -612,6 +612,11 @@ function syncUebernehmen(paket){
   if(paket.v !== 1){ syncFremdeVersion = true; render(); return "version"; }
   if(paket.von === syncGeraeteId()) return "eigenes";       // das eigene Echo
   syncGehoert = Date.now();          // jemand ist da - das ist der Beweis
+  // Wenn Daten hereinkommen, steht die Leitung - egal was ein alter Sendefehler
+  // behauptet. Gemessen: das Netz war laengst wieder da, der Stand aktualisierte
+  // sich live vor den Augen des Nutzers, und die Pille sagte weiter "keine
+  // Verbindung" - weil der Merker erst beim naechsten eigenen Senden verfiel.
+  if(syncStatus === "fehler"){ syncStatus = "offen"; syncVersucht = null; }
   // Wer sich meldet, bekommt den laufenden Stand. Ohne diese Antwort sieht ein
   // Beitretender nichts, bis der andere zufaellig etwas tut.
   if(paket.hallo && state.match && !syncEmpfangend) syncSenden();
@@ -2370,7 +2375,12 @@ function syncBlock(){
       + '<div class="sublbl">Auf dem anderen Handy diesen Code eintippen. ' + wie + '</div>'
       + '<div class="stack" style="margin-top:10px">'
       +   '<button class="btn" data-act="sync_aus">Verbindung trennen</button>'
-      + '</div></div>';
+      + '</div>'
+      // Der Satz stand bisher nur, BEVOR es einen Code gab - also genau falsch
+      // herum. Wer den Code hat, sieht die Runde mit; das gehoert dorthin, wo
+      // der Code steht.
+      + '<div class="sublbl" style="margin-top:10px">&#128273; <b>Der Code ist der Schlüssel.</b> Wer ihn hat, sieht eure Runde mit &ndash; und kann mitschreiben.</div>'
+      + '</div>';
   }
   return '<div class="sublbl" style="margin:0 0 8px">'
     +   'Eins am Tisch, eins an der Scheibe &ndash; beide tragen ein.</div>'
@@ -2385,7 +2395,7 @@ function syncBlock(){
     + (syncMsg ? '<div class="sublbl bad" style="margin-top:6px">' + esc(syncMsg) + '</div>' : '')
     + '<div class="sublbl" style="margin-top:10px">&#9432; &Uuml;ber ntfy.sh &ndash; kein Konto, '
     +   'keine Kosten. Es gehen nur die Namen und Zahlen der Runde raus. '
-    +   '<b>Der Code ist der Schl&uuml;ssel.</b></div>';
+    +   '<b>Der Code ist der Schlüssel.</b></div>';
 }
 var syncMsg = "";
 
