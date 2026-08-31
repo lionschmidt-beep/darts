@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.35";
+var VER    = "1.36";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -577,8 +577,30 @@ function syncUebernehmen(paket){
   return "uebernommen";
 }
 
+// Der Raum ueberlebt das Wegwischen der App. Gemessen: nach einem Reload stand
+// raum:null, waehrend der Spielstand ueberlebte - auf dem Handy reicht dafuer ein
+// gesperrter Bildschirm. Mit Zeitstempel, damit man am naechsten Tag nicht still
+// im Raum von gestern haengt.
+var RAUM_HAELT = 12 * 3600 * 1000;
+
+function raumMerken(code){
+  try{
+    if(code) localStorage.setItem("darts_raum", JSON.stringify({ code:code, ts:Date.now() }));
+    else localStorage.removeItem("darts_raum");
+  }catch(e){}
+}
+function raumHolen(){
+  try{
+    var r = JSON.parse(localStorage.getItem("darts_raum") || "null");
+    if(!r || !r.code || !r.ts) return null;
+    if(Date.now() - r.ts > RAUM_HAELT){ raumMerken(null); return null; }
+    return r.code;
+  }catch(e){ return null; }
+}
+
 function syncOeffnen(code){
   syncSchliessen();
+  raumMerken(code);
   syncRaum = code;
   syncStatus = "verbinde";
   var Q = syncQuelle || (typeof EventSource === "function" ? EventSource : null);
@@ -613,6 +635,7 @@ function syncNachfassen(){
 }
 
 function syncSchliessen(){
+  raumMerken(null);          // wer trennt, will getrennt bleiben
   if(syncES){ try{ syncES.close(); }catch(e){} }
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
   syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
@@ -3563,6 +3586,12 @@ if("serviceWorker" in navigator && location.protocol.indexOf("http")===0){
 // Beim Start und bei jeder Rueckkehr auf eine neuere Version pruefen. Ohne diese
 // zwei Zeilen waere pruefeVersion() eine Funktion, die niemand ruft - genau die
 // Sorte Verdrahtung, die im Test gruen aussieht und in der App nichts tut.
+// Ein gemerkter Raum wird beim Start wieder geoeffnet.
+try{
+  var _raum = raumHolen();
+  if(_raum) syncOeffnen(_raum);
+}catch(e){}
+
 if(typeof pruefeVersion === "function" && location.protocol.indexOf("http")===0){
   pruefeVersion();
   document.addEventListener("visibilitychange", function(){

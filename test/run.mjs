@@ -1048,6 +1048,41 @@ t("Nach dem Empfang wird nichts zurueckgefunkt", () => {
      "sonst schickt render() den empfangenen Stand mit hoeherer Uhr zurueck");
 });
 
+t("Der Raum ueberlebt das Wegwischen der App", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABCDEF");
+  D.applyDart(3, 20);
+  // Gemessen: nach einem Reload stand raum:null, waehrend der Spielstand (441)
+  // ueberlebte. Auf dem Handy reicht ein gesperrter Bildschirm - der Abgleich
+  // waere stumm, und man saehe es nur in den Einstellungen.
+  const nach = reboot(ctx);
+  eq(nach.D.syncStand().raum, "ABCDEF", "der Raum muss wieder da sein");
+  eq(nach.D.getMatch().players[0].score, 441, "und der Stand auch");
+});
+
+t("Ein alter Raum wird nicht wiederbelebt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABCDEF");
+  // Am naechsten Tag will niemand still im Raum von gestern haengen.
+  ctx.store.set("darts_raum", JSON.stringify({ code: "ABCDEF", ts: Date.now() - 13 * 3600 * 1000 }));
+  const nach = reboot(ctx);
+  eq(nach.D.syncStand().raum, null, "nach 13 Stunden ist der Raum kalt");
+});
+
+t("Getrennt bleibt getrennt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABCDEF");
+  D.syncSchliessen();
+  const nach = reboot(ctx);
+  eq(nach.D.syncStand().raum, null, "wer trennt, will getrennt bleiben");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
