@@ -1487,6 +1487,55 @@ t("Doppel-In: mit Ja wird ganz normal gebucht", () => {
   eq(r2, "ok", "die Frage kommt nur beim Eroeffnen, war: " + r2);
 });
 
+t("Nach einem Empfang kann man weiterspielen", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fremd = JSON.parse(JSON.stringify(D.syncPaket().match));   // OHNE _undo, so kommt es an
+  fremd.players[0].score = 481;
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  // 🔴 Genau hier lag der Totalausfall: syncPaket() schmeisst alles mit _ raus
+  // (94 % Paketgroesse), und der Empfaenger legte den Undo-Stapel nie wieder an.
+  // snapshot() warf "Cannot read properties of undefined" - das beitretende
+  // Handy konnte KEINEN Wurf eintragen, ohne Fehlermeldung auf dem Schirm.
+  let err = null;
+  try { D.applyDart(3, 20); } catch (e) { err = e.message; }
+  eq(err, null, "ein Wurf nach dem Empfang darf nicht werfen: " + err);
+  eq(D.getMatch().players[0].score, 421, "und er muss zaehlen");
+});
+
+t("Und der Rueckweg funktioniert nach einem Empfang auch", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fremd = JSON.parse(JSON.stringify(D.syncPaket().match));
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  D.applyDart(3, 20);
+  eq(D.getMatch().players[0].score, 441);
+  D.undo();
+  eq(D.getMatch().players[0].score, 501, "zurueck geht auch");
+});
+
+t("Ein empfangenes Spiel steckt das andere Handy nicht an", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  // Gemessen: sobald das beigetretene Handy irgendetwas speicherte, verlor auch
+  // das ERSTE seinen Undo-Stapel - danach konnte KEINS mehr einen Wurf eintragen.
+  const fremd = JSON.parse(JSON.stringify(D.syncPaket().match));
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  D.getState().settings.inputMode = "sum";      // irgendetwas, das save() ausloest
+  D.render();
+  const zurueck = JSON.parse(JSON.stringify(D.syncPaket().match));
+  D.syncUebernehmen({ v: 1, uhr: 10000, von: "ANDERES", match: zurueck });
+  let err = null;
+  try { D.applyDart(1, 5); } catch (e) { err = e.message; }
+  eq(err, null, "auch nach mehreren Runden hin und her: " + err);
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;

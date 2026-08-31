@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.40";
+var VER    = "1.41";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -639,7 +639,23 @@ function syncUebernehmen(paket){
   try{
     syncUhr = paket.uhr;
     verlaufNachtragen(paket.match);      // vor dem Setzen: gleich ist es weg
+    // 🔴 Alles mit fuehrendem _ ist lokal und kommt NIE ueber die Leitung (siehe
+    // syncPaket). Der Empfaenger muss es also selbst mitbringen - sonst fehlt es
+    // nach dem ersten Empfang fuer immer. Gemessen: ohne diese Zeilen warf
+    // snapshot() "Cannot read properties of undefined", und das beigetretene
+    // Handy konnte KEINEN Wurf mehr eintragen, ohne dass etwas auf dem Schirm
+    // stand. Schlimmer: sobald es einmal gespeichert hatte, steckte es das
+    // andere Handy an, und beide waren tot.
+    var lokal = {};
+    if(state.match) for(var lk in state.match)
+      if(lk.charAt(0) === "_") lokal[lk] = state.match[lk];
     state.match = paket.match;
+    if(state.match){
+      for(var lk2 in lokal) state.match[lk2] = lokal[lk2];
+      // Der alte Rueckweg passt nicht zu einem fremden Stand - auf etwas, das man
+      // nie hatte, kann man nicht zurueck.
+      state.match._undo = [];
+    }
     // Beide Merker auf den empfangenen Stand: sonst sieht syncNachfassen() beim
     // naechsten render() einen "ungesendeten" Unterschied und funkt genau das
     // zurueck, was gerade hereinkam - mit erhoehter Uhr. Das ist dieselbe
