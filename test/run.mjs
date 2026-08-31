@@ -965,6 +965,74 @@ t("Ein normaler neuerer Stand loest keine Warnung aus", () => {
      "sonst warnt sie bei jedem normalen Wurf des anderen Handys");
 });
 
+t("Ein Handy mit anderer Version wird nicht stumm ignoriert", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.syncOeffnen("ABC123");
+  // Zwei Handys koennen verschiedene App-Staende haben (PWA aktualisiert nicht
+  // von selbst). Ein Paket mit fremdem Format wurde bisher wortlos verworfen -
+  // auf dem Schirm sah das aus wie "der Sync geht nicht".
+  eq(D.syncUebernehmen({ v: 2, uhr: 5, von: "ANDERES", match: {} }), "version");
+  D.setView("game"); D.render();
+  ok(/Version|aktualis/i.test(ctx.app.innerHTML),
+     "es muss dastehen, WARUM nichts ankommt");
+});
+
+t("Eine neue Version auf dem Server wird gemeldet", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  // Die App laedt sich nicht von selbst neu - bei einer installierten PWA kann
+  // ein Handy tagelang auf einem alten Stand bleiben. Beim Sync mit zwei Geraeten
+  // ist das ein echtes Risiko.
+  D.setVersionsPruefer(() => Promise.resolve("1.99"));
+  D.pruefeVersion();
+  await null; await null; await null;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(/1\.99|Neuladen/i.test(ctx.app.innerHTML),
+     "der Hinweis muss dastehen: " + ctx.app.innerHTML.slice(0, 200));
+});
+
+t("Die eigene Version loest keinen Hinweis aus", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setVersionsPruefer(() => Promise.resolve(D.version()));
+  D.pruefeVersion();
+  await null; await null; await null;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(!/Neuladen/i.test(ctx.app.innerHTML), "sonst steht er immer da");
+});
+
+t("Eine Fehlerseite ist keine Versionsnummer", async () => {
+  // Der haeufigste Fall ist nicht "kein Netz", sondern: der Server liefert 200
+  // mit einer HTML-Seite (404-Seite, Portal-Anmeldung im fremden WLAN). Ohne
+  // Pruefung stuende dann "Version <!DOCTYPE html>... ist da" auf dem Schirm.
+  for (const muell of ["<!DOCTYPE html><html>404</html>", "", "   ", "kaputt",
+                       "2.0", "1", "v1.35", "1.35.2"]) {
+    const ctx = boot();
+    ctx.D.setVersionsPruefer(() => Promise.resolve(muell));
+    ctx.D.pruefeVersion();
+    await null; await null; await null;
+    ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    ctx.D.setView("game"); ctx.D.render();
+    ok(!/data-act="neuladen"/.test(ctx.app.innerHTML),
+       JSON.stringify(muell.slice(0, 25)) + " darf nicht als Version gelten");
+  }
+});
+
+t("Ein kaputter Versions-Abruf tut gar nichts", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setVersionsPruefer(() => Promise.reject(new Error("offline")));
+  D.pruefeVersion();
+  await null; await null; await null;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setView("game"); D.render();
+  ok(!/Neuladen/i.test(ctx.app.innerHTML), "ohne Netz kein Hinweis, kein Absturz");
+});
+
 t("Nach dem Empfang wird nichts zurueckgefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
@@ -1734,7 +1802,7 @@ t("Kein Element sieht klickbar aus, ohne es zu sein", () => {
   eq(tot, [], "tote Klickziele gefunden");
 });
 
-t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
+t("Jede Aktion im Handler wird auch irgendwo angeboten", async () => {
   const ctx = boot();
   const D = ctx.D;
   playMatch(D, ["lion", "arne"], 0);
@@ -1758,6 +1826,18 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", () => {
     w.D.applySpokenResult(w.D.parseSpeech("20 20 20", []), "…");
     w.D.setView("game"); w.D.render();
     (w.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+      .forEach(x => angeboten.add(x.slice(10, -1)));
+  }
+
+  // Der Neuladen-Hinweis erscheint nur, wenn der Server eine neuere Version meldet.
+  {
+    const v = boot();
+    v.D.setVersionsPruefer(() => Promise.resolve("1.999"));
+    v.D.pruefeVersion();
+    await null; await null;                 // der Abruf kommt als Microtask
+    v.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    v.D.setView("game"); v.D.render();
+    (v.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
       .forEach(x => angeboten.add(x.slice(10, -1)));
   }
 

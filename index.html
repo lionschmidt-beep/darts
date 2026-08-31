@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.34";
+var VER    = "1.35";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -483,6 +483,7 @@ var syncQuelle = null;        // dito fuer die Empfangsseite
 var syncZuletzt = null;       // was zuletzt rausging - damit render() nachfassen kann
 var syncVerworfen = false;    // hat der letzte Empfang eigene, ungesendete Wuerfe geschluckt?
 var syncVersucht = null;      // was zuletzt losgeschickt wurde (gegen doppeltes Senden)
+var syncFremdeVersion = false; // das andere Handy laeuft auf einem anderen Stand
 
 function syncCode(){
   // Ohne I/O/1/0: die werden auf einem Handybildschirm dauernd verwechselt.
@@ -535,7 +536,11 @@ function syncSenden(){
 
 // Kern der Sache, und die einzige Stelle, an der etwas schiefgehen kann.
 function syncUebernehmen(paket){
-  if(!paket || paket.v !== 1) return "ungueltig";
+  if(!paket || typeof paket !== "object") return "ungueltig";
+  // Zwei Handys koennen verschiedene App-Staende haben - die PWA aktualisiert
+  // nicht von selbst. Ein fremdes Paketformat wurde bisher wortlos verworfen;
+  // auf dem Schirm sah das aus wie "der Sync ist kaputt".
+  if(paket.v !== 1){ syncFremdeVersion = true; render(); return "version"; }
   if(paket.von === syncGeraeteId()) return "eigenes";       // das eigene Echo
   // Aelteres darf Neueres NIE ueberschreiben. Bei Gleichstand entscheidet die
   // Geraete-Kennung - Hauptsache beide Seiten entscheiden gleich.
@@ -610,7 +615,7 @@ function syncNachfassen(){
 function syncSchliessen(){
   if(syncES){ try{ syncES.close(); }catch(e){} }
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
-  syncVerworfen = false; syncVersucht = null;
+  syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
 }
 function syncAn(){ return !!syncRaum; }
 
@@ -1658,6 +1663,7 @@ function renderGame(){
                    : '<span class="sum">Aufnahme: <b>'+turnSum+'</b></span>')
     + '</div>'
     + '</div>'
+    + versionsHinweis()
     + syncPille()
     + (wartetAufOk()
         ? '<div class="warteok">Stimmt das? Sag <b>„okay"</b> &ndash; oder <b>„'
@@ -1693,10 +1699,7 @@ function renderGame(){
     + '</div>'
     + '<div class="vstat" id="voiceStatus"></div>'
     + '<div class="vhint">'
-    + 'Doppel/Triple <b>vor</b> die Zahl: „Triple 20, 20, Doppel 5" &middot; „Bull" &middot; „daneben"<br>'
-    + 'Nach drei Darts liest die App vor, was sie verstanden hat. Dann: '
-    + '<b>„okay"</b> &rarr; nächster Spieler &middot; <b>„20 raus"</b> &rarr; sie fragt, '
-    + 'was stattdessen rein soll &middot; <b>„zurück"</b> &rarr; letzten Wurf löschen.</div>'
+    + 'Sag z.B. „<b>Triple 20, 20, Doppel 5</b>" &middot; „Bull" &middot; „daneben" &middot; „<b>zurück</b>"</div>'
     + '</div>'
     + '<button class="btn ghost danger sm" data-act="quit" style="width:auto;margin:12px auto 0">Spiel abbrechen</button>';
 }
@@ -2064,11 +2067,57 @@ function istSafariOhneInstall(){
 // Im Spiel steht der Verbindungszustand als kleine Pille. Vorher gab es ihn nur
 // in den Einstellungen - man haette also erst wegnavigieren muessen, um zu sehen,
 // ob das zweite Handy ueberhaupt noch mitzaehlt.
+// Nach dem Einschalten zum Mikro-Block scrollen. Defensiv: im Testlauf gibt es
+// kein scrollIntoView, und ein fehlender Scroll darf nie das Spiel aufhalten.
+function zeigMikroBlock(){
+  try{
+    var el = document.getElementById("voiceStatus");
+    if(el && el.parentNode && typeof el.parentNode.scrollIntoView === "function")
+      el.parentNode.scrollIntoView({ block:"end", behavior:"smooth" });
+  }catch(e){}
+}
+
+// ---- Neue Version auf dem Server? ---------------------------------------
+// Der Service Worker ist network-first, aber eine installierte PWA laedt beim
+// Antippen nicht zwingend neu - ein Handy kann tagelang auf einem alten Stand
+// bleiben. Mit zwei Handys in derselben Runde ist das ein echtes Risiko, denn
+// das Sync-Format traegt eine Versionsnummer.
+var neuereVersion = null;
+var versionsPruefer = null;      // im Test austauschbar
+
+function pruefeVersion(){
+  var f = versionsPruefer;
+  if(!f){
+    if(typeof fetch !== "function") return;
+    f = function(){
+      return fetch("./VERSION?t=" + new Date().getTime(), { cache:"no-store" })
+        .then(function(r){ return r.text(); });
+    };
+  }
+  try{
+    f().then(function(txt){
+      var neu = String(txt || "").trim();
+      // Nur eine PLAUSIBLE Versionsnummer zaehlt: bei einem Fehler liefert der
+      // Server eine HTML-Seite, und die wuerde sonst als "neue Version" gelten.
+      if(/^1\.\d+$/.test(neu) && neu !== VER){ neuereVersion = neu; render(); }
+    }, function(){});
+  }catch(e){}
+}
+
+function versionsHinweis(){
+  if(!neuereVersion) return "";
+  return '<div class="warnzeile" data-act="neuladen" style="cursor:pointer">'
+    + '&#8635; <b>Version ' + esc(neuereVersion) + '</b> ist da &ndash; zum Neuladen tippen.</div>';
+}
+
 function syncPille(){
   if(!syncAn()) return "";
   // Die Warnung ERSETZT die Pille nicht - sonst sieht man im wichtigsten Moment
   // nicht mehr, ob ueberhaupt noch eine Verbindung steht und zu welchem Raum.
-  var warn = syncVerworfen
+  var warn = syncFremdeVersion
+    ? '<div class="warnzeile">&#9888;&#65039; Das andere Handy l&auml;uft auf einer '
+      + '<b>anderen Version</b> &ndash; dort die App einmal neu laden.</div>'
+    : syncVerworfen
     ? '<div class="warnzeile">&#9888;&#65039; Das andere Handy hatte einen neueren '
       + 'Stand &ndash; deine letzten Eingaben wurden <b>überschrieben</b>.</div>'
     : "";
@@ -3388,7 +3437,16 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="quit"){ if(confirm("Spiel abbrechen? Kein Sieg wird gezählt.")){ state.match=null; view="home"; save(); render(); } return; }
 
   // Sprach-Eingabe
-  if(act==="voice"){ if(voiceOn){ stopVoice(); } else { startVoice(); } render(); return; }
+  if(act==="neuladen"){ try{ location.reload(); }catch(e){} return; }
+  if(act==="voice"){
+    if(voiceOn){ stopVoice(); render(); return; }
+    startVoice(); render();
+    // Der Mikro-Block steht ganz unten: gemessen auf 390x844 beginnt der Hinweis
+    // bei 843 px, also genau an der Fensterkante. Wer das Mikro einschaltet, will
+    // ihn JETZT sehen - also hinfuehren statt hoffen, dass jemand scrollt.
+    zeigMikroBlock();
+    return;
+  }
   if(act==="tts"){
     ttsOn=!ttsOn; state.settings.tts=ttsOn; save();
     if(!ttsOn){ try{ if("speechSynthesis" in window) speechSynthesis.cancel(); }catch(e){} }
@@ -3411,6 +3469,8 @@ document.getElementById("app").addEventListener("click", function(ev){
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
 window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
+  pruefeVersion:pruefeVersion, version:function(){ return VER; },
+  setVersionsPruefer:function(f){ versionsPruefer = f; neuereVersion = null; },
   syncNachfassen:syncNachfassen,
   syncUebernehmen:syncUebernehmen, syncPaket:syncPaket, syncAn:syncAn, syncCode:syncCode,
   syncStand:function(){ return { raum:syncRaum, uhr:syncUhr, status:syncLage(), geraet:syncGeraeteId() }; },
@@ -3497,6 +3557,16 @@ if(typeof window.addEventListener === "function"){
 if("serviceWorker" in navigator && location.protocol.indexOf("http")===0){
   window.addEventListener("load", function(){
     navigator.serviceWorker.register("./sw.js").catch(function(){});
+  });
+}
+
+// Beim Start und bei jeder Rueckkehr auf eine neuere Version pruefen. Ohne diese
+// zwei Zeilen waere pruefeVersion() eine Funktion, die niemand ruft - genau die
+// Sorte Verdrahtung, die im Test gruen aussieht und in der App nichts tut.
+if(typeof pruefeVersion === "function" && location.protocol.indexOf("http")===0){
+  pruefeVersion();
+  document.addEventListener("visibilitychange", function(){
+    if(!document.hidden) pruefeVersion();
   });
 }
 </script>
