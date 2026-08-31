@@ -1426,6 +1426,67 @@ t("Der Verbindungsstand zeigt eine Abweisung an", async () => {
   eq(D.syncLage(), "fehler", "sonst steht 'verbunden' da, waehrend nichts ankommt");
 });
 
+t("Auch das groesstmoegliche Spiel passt durch die Leitung", () => {
+  const { D } = boot();
+  // Gemessen: 4 Spieler, Best-of-7, alle Legs gespielt -> 928 bis 1317 Bytes.
+  // Legs wachsen mit (~40 B je Leg), aber selbst der Vollausbau bleibt weit
+  // unter der Zustellgrenze von 4000. Der Test haelt das fest, damit ein
+  // spaeteres Feld im Match-Zustand nicht unbemerkt darueber schiebt.
+  const st = D.getState();
+  ["Kai", "Nina"].forEach(n => {
+    if (!st.roster.some(x => x.name === n))
+      st.roster.push({ id: n.toLowerCase(), name: n, winsManual: 0, guest: false });
+  });
+  const ids = st.roster.slice(0, 4).map(p => p.id);
+  D.startMatch(ids, { gameType: 501, doubleOut: true, bestOf: 7 });
+  // Kuenstlich viele Legs eintragen - schneller als sie zu spielen
+  const m = D.getMatch();
+  for (let i = 0; i < 7; i++) m.legs.push({ winnerId: ids[i % ids.length], darts: 21 });
+  for (let i = 0; i < 30; i++) D.applyDart(1, (i % 20) + 1);
+  const bytes = JSON.stringify(D.syncPaket()).length;
+  ok(bytes < 4000, "Vollausbau: " + bytes + " Bytes (Grenze 4000)");
+});
+
+t("Doppel-In im Summen-Modus fragt nach, statt zu raten", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.getState().settings.inputMode = "sum";
+  D.setView("game"); D.render();
+  // Bei Doppel-In weiss die App nicht, ob die 60 mit einem Doppel EROEFFNET hat.
+  // Sie muss fragen. Der Zweig war bisher ungetestet - und er deckt einen schon
+  // gefixten Bug ab: ohne ihn war Doppel-In im Summen-Modus wirkungslos,
+  // waehrend der Schirm das Gegenteil behauptete.
+  eq(D.applyTurnSum(60), "needopen", "sie darf nicht einfach buchen");
+  eq(D.getMatch().players[0].score, 501, "und bis zur Antwort bleibt der Stand");
+
+  // Antwort NEIN: geworfen, aber nicht eroeffnet - Darts zaehlen, Punkte nicht.
+  const vorherIdx = D.getMatch().currentIdx;
+  eq(D.applyTurnSum(60, null, false), "nostart");
+  eq(D.getMatch().players[vorherIdx].score, 501, "keine Punkte ohne Eroeffnung");
+  ok(D.getMatch().players[vorherIdx].darts >= 3, "die Darts zaehlen trotzdem");
+  // Und die ANZEIGE muss dasselbe sagen wie der Stand. (Rot-Probe dazu: value:sum
+  // statt value:0 im nostart-Zweig aendert NICHTS - closeTurn("nostart") zwingt die
+  // Summe ohnehin auf 0. Zwei Stellen sichern dasselbe, die Mutation ist folgenlos.
+  // Der Test bleibt trotzdem: er haelt fest, dass die Anzeige ehrlich ist.)
+  eq(D.getMatch().lastTurn ? D.getMatch().lastTurn.sum : 0, 0,
+     "die letzte Aufnahme darf keine Punkte behaupten");
+});
+
+t("Doppel-In: mit Ja wird ganz normal gebucht", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleIn: true, doubleOut: true, bestOf: 1 });
+  D.getState().settings.inputMode = "sum";
+  D.applyTurnSum(60, null, true);
+  eq(D.getMatch().players[0].score, 441, "mit Eroeffnung zaehlen die Punkte");
+  // Und danach wird nicht mehr gefragt.
+  const m = D.getMatch();
+  m.currentIdx = 0;
+  const r2 = D.applyTurnSum(60);
+  eq(r2, "ok", "die Frage kommt nur beim Eroeffnen, war: " + r2);
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
