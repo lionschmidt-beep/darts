@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.39";
+var VER    = "1.40";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -474,6 +474,7 @@ var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraend
 var SYNC_HOST = "https://ntfy.sh/";
 var SYNC_MAX = 4000;          // gemessene Zustellgrenze, siehe syncSenden()
 var syncZuGross = 0;          // Bytes des Pakets, das nicht rausging
+var syncSendefehler = false;  // ging ein Versuch daneben, ohne je bestaetigt zu sein?
 var syncRaum = null;          // Raumcode oder null
 var syncES = null;            // die offene Verbindung
 var syncUhr = 0;              // zaehlt hoch bei JEDER lokalen Aenderung
@@ -565,8 +566,16 @@ function syncSenden(){
       // eine spaet eintreffende Sendebestaetigung den Merker auf einen Stand
       // zurueck, den es nicht mehr gibt - und der naechste Empfang meldet
       // faelschlich "deine Eingaben wurden ueberschrieben".
-      .then(function(){ if(nr === syncEmpfangsNr) syncZuletzt = jetzt; },
-            function(){ syncStatus = "fehler"; syncVersucht = null; });
+      .then(function(r){
+        // 🔴 fetch wirft NICHT bei HTTP 429 oder 500 - der Erfolgszweig laeuft
+        // auch dann. Ohne diese Pruefung haelt die App eine Drosselung fuer eine
+        // Zustellung und merkt nie, dass das andere Handy nichts mehr bekommt.
+        if(r && r.ok === false){
+          syncStatus = "fehler"; syncVersucht = null; syncSendefehler = true; return;
+        }
+        syncSendefehler = false;
+        if(nr === syncEmpfangsNr) syncZuletzt = jetzt;
+      }, function(){ syncStatus = "fehler"; syncVersucht = null; syncSendefehler = true; });
   }catch(e){ syncStatus = "fehler"; return false; }
   return true;
 }
@@ -620,7 +629,10 @@ function syncUebernehmen(paket){
   // gemessen bei einem Netzabbruch: der offline geworfene Dart war spurlos
   // verschwunden, und nichts hat es gesagt. Der fremde Stand gilt trotzdem
   // (er ist neuer), aber schweigend darf das nicht passieren.
-  if(syncZuletzt !== null && JSON.stringify(state.match || null) !== syncZuletzt)
+  // Ein fehlgeschlagener Sendeversuch zaehlt genauso wie ein bestaetigter Stand:
+  // in beiden Faellen hat jemand hier etwas eingegeben, das drueben nie ankam.
+  if((syncZuletzt !== null || syncSendefehler)
+     && JSON.stringify(state.match || null) !== syncZuletzt)
     syncVerworfen = true;
   syncEmpfangend = true;
   syncEmpfangsNr++;
@@ -701,7 +713,7 @@ function syncSchliessen(){
   if(syncES){ try{ syncES.close(); }catch(e){} }
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
   syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
-  syncHoert = null; syncZuGross = 0;
+  syncHoert = null; syncZuGross = 0; syncSendefehler = false;
 }
 function syncAn(){ return !!syncRaum; }
 
@@ -732,6 +744,9 @@ function syncLage(){
   // readyState blieb bei 1, waehrend das Geraet offline war - die Anzeige sagte
   // "verbunden", waehrend nichts mehr ankam. Nur die sichere Richtung nutzen.
   if(typeof navigator !== "undefined" && navigator.onLine === false) return "fehler";
+  // Ein Sendefehler schlaegt durch, auch wenn die EMPFANGS-Leitung offen ist:
+  // beides sind getrennte Wege, und "verbunden" waere gelogen, wenn nichts rausgeht.
+  if(syncStatus === "fehler") return "fehler";
   if(typeof syncES.readyState !== "number") return syncStatus;   // fremde Attrappe
   return syncES.readyState === 1 ? "offen"
        : syncES.readyState === 0 ? "verbinde" : "fehler";

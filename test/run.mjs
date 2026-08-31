@@ -1393,6 +1393,39 @@ t("Ein zu grosses Paket wird gar nicht erst losgeschickt", () => {
      "und es muss dastehen, dass der Abgleich steht");
 });
 
+t("Eine abgewiesene Nachricht gilt nicht als gesendet", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  // fetch wirft NICHT bei HTTP 429 oder 500 - der Erfolgszweig laeuft trotzdem.
+  // Ohne Pruefung von r.ok haelt die App eine Drosselung fuer eine Zustellung.
+  D.setSyncTransport(() => Promise.resolve({ ok: false, status: 429 }),
+    function () { this.readyState = 1; this.close = () => {}; });
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  await null; await null; await null;
+  // Der Stand gilt als NICHT draussen - also meldet der naechste Empfang zu Recht
+  // einen Verlust, und das Nachfassen versucht es erneut.
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.players[0].score = 300;
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd });
+  D.setView("game"); D.render();
+  ok(/überschrieben/i.test(ctx.app.innerHTML),
+     "eine abgewiesene Nachricht darf nicht als zugestellt durchgehen");
+});
+
+t("Der Verbindungsstand zeigt eine Abweisung an", async () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setSyncTransport(() => Promise.resolve({ ok: false, status: 429 }),
+    function () { this.readyState = 1; this.close = () => {}; });
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.applyDart(3, 20);
+  await null; await null; await null;
+  eq(D.syncLage(), "fehler", "sonst steht 'verbunden' da, waehrend nichts ankommt");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
