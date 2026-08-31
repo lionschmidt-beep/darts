@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.36";
+var VER    = "1.37";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -565,6 +565,7 @@ function syncUebernehmen(paket){
   syncEmpfangend = true;
   try{
     syncUhr = paket.uhr;
+    verlaufNachtragen(paket.match);      // vor dem Setzen: gleich ist es weg
     state.match = paket.match;
     // Beide Merker auf den empfangenen Stand: sonst sieht syncNachfassen() beim
     // naechsten render() einen "ungesendeten" Unterschied und funkt genau das
@@ -1175,20 +1176,27 @@ function applyDart(mult, num){
 }
 
 // Match abschliessen -> wandert in die Historie, aus der Rangliste und H2H entstehen.
+// Aus einer Partie wird ein Verlaufseintrag. Zwei Aufrufer: das eigene Spielende
+// und der Empfang eines beendeten Spiels vom zweiten Handy - beide muessen genau
+// dasselbe schreiben, sonst zaehlt dieselbe Partie auf zwei Handys verschieden.
+function verlaufEintrag(m){
+  return {
+    id:m.id, ts:m.ts, ended:Date.now(), mode:m.mode, gameType:m.gameType,
+    doubleOut:m.doubleOut, doubleIn:m.doubleIn, bestOf:m.bestOf, winnerId:m.winnerId,
+    legs:(m.legs||[]).slice(), platz:(m.platz||[]).slice(),
+    players:(m.players||[]).map(function(p){
+      return {id:p.id, name:p.name, legsWon:p.legsWon, darts:p.darts, scored:p.scored,
+              best:p.best, tons:p.tons, oneEighties:p.oneEighties, checkout:p.checkout,
+              avg: p.darts ? +((p.scored/p.darts*3).toFixed(2)) : 0};
+    })
+  };
+}
+
 function finishMatch(){
   var m = state.match; if(!m) return null;
   var rec = null;
   if(state.settings.keepHistory!==false && m.finished){
-    rec = {
-      id:m.id, ts:m.ts, ended:Date.now(), mode:m.mode, gameType:m.gameType,
-      doubleOut:m.doubleOut, doubleIn:m.doubleIn, bestOf:m.bestOf, winnerId:m.winnerId,
-      legs:m.legs.slice(), platz:(m.platz||[]).slice(),
-      players:m.players.map(function(p){
-        return {id:p.id, name:p.name, legsWon:p.legsWon, darts:p.darts, scored:p.scored,
-                best:p.best, tons:p.tons, oneEighties:p.oneEighties, checkout:p.checkout,
-                avg: p.darts ? +((p.scored/p.darts*3).toFixed(2)) : 0};
-      })
-    };
+    rec = verlaufEintrag(m);
     state.history.unshift(rec);
     // Deckeln, aber nichts unterschlagen: der aelteste Sieg wird eingefroren,
     // sonst sinkt die Rangliste beim 501. Spiel stillschweigend.
@@ -2131,6 +2139,42 @@ function versionsHinweis(){
   if(!neuereVersion) return "";
   return '<div class="warnzeile" data-act="neuladen" style="cursor:pointer">'
     + '&#8635; <b>Version ' + esc(neuereVersion) + '</b> ist da &ndash; zum Neuladen tippen.</div>';
+}
+
+// Ein Spiel, das auf dem ANDEREN Handy zu Ende ging, gehoert genauso in den
+// eigenen Verlauf - sonst sieht nur der die Partie, der zufaellig getippt hat.
+// Gemessen an zwei Geraeten: danach stand Lion 1, Arne 0, und bei Arne war das
+// Spiel spurlos weg. Der Verlauf bleibt dabei LOKAL - uebertragen wird nichts
+// Zusaetzliches, nur der Endstand, der ohnehin schon kommt.
+function verlaufNachtragen(m){
+  if(!m || !m.finished || !m.id) return false;
+  if(state.settings.keepHistory === false) return false;
+  for(var i=0;i<state.history.length;i++)
+    if(state.history[i].id === m.id) return false;        // schon drin
+  var rec = verlaufEintrag(m);
+  // Spieler auf die EIGENEN Kennungen abbilden. Sie werden aus dem Namen
+  // gebildet und stimmen meist ueberein - aber nicht, wenn hier schon mal ein
+  // Namensvetter existierte. Ohne diesen Schritt findet die Duell-Bilanz die
+  // Partie nicht wieder.
+  rec.players = rec.players.map(function(p){
+    var eig = eigeneId(p);
+    return eig === p.id ? p : Object.assign({}, p, { id: eig });
+  });
+  if(rec.winnerId){
+    var sieger = (m.players || []).filter(function(p){ return p.id === rec.winnerId; })[0];
+    if(sieger) rec.winnerId = eigeneId(sieger);
+  }
+  state.history.unshift(rec);
+  capHistory();
+  return true;
+}
+
+function eigeneId(spieler){
+  var r = state.roster, i;
+  for(i=0;i<r.length;i++) if(r[i].id === spieler.id) return r[i].id;
+  var n = (spieler.name || "").toLowerCase();
+  for(i=0;i<r.length;i++) if(r[i].name.toLowerCase() === n) return r[i].id;
+  return addPlayer(spieler.name, true) || spieler.id;     // unbekannt: als Gast
 }
 
 function syncPille(){

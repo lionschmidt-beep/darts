@@ -1083,6 +1083,110 @@ t("Getrennt bleibt getrennt", () => {
   eq(nach.D.syncStand().raum, null, "wer trennt, will getrennt bleiben");
 });
 
+t("Ein beendetes Spiel landet auf BEIDEN Handys im Verlauf", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  // Arnes Handy: hat selbst nichts getippt, hoert nur mit.
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fertig = JSON.parse(JSON.stringify(D.getMatch()));
+  fertig.finished = true; fertig.winnerId = "lion";
+  fertig.players[0].score = 0; fertig.players[0].legsWon = 1;
+  eq(D.getState().history.length, 0);
+  // Gemessen an zwei echten Geraeten: hier stand danach Lion 1, Arne 0 - und
+  // Arnes match war null. Die Partie war bei ihm spurlos weg.
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fertig });
+  eq(D.getState().history.length, 1, "das Spiel muss im eigenen Verlauf stehen");
+  eq(D.getState().history[0].winnerId, "lion");
+});
+
+t("Dasselbe Spiel wird nicht doppelt eingetragen", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fertig = JSON.parse(JSON.stringify(D.getMatch()));
+  fertig.finished = true; fertig.winnerId = "lion";
+  // Der Stand kommt mehrfach an (Nachfassen, since=15m beim Wiederverbinden).
+  for (let i = 0; i < 5; i++)
+    D.syncUebernehmen({ v: 1, uhr: 9999 + i, von: "ANDERES", match: fertig });
+  eq(D.getState().history.length, 1, "sonst steht dieselbe Partie fuenfmal im Verlauf");
+});
+
+t("Wer selbst gespielt hat, bekommt keinen zweiten Eintrag", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 40);
+  D.applyDart(2, 20);                     // D20 -> Sieg, lokal getippt
+  D.finishMatch();
+  eq(D.getState().history.length, 1);
+  // Und jetzt kommt der eigene Endstand vom anderen Handy zurueck.
+  const zurueck = JSON.parse(JSON.stringify(D.getState().history[0]));
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES",
+                      match: Object.assign({}, zurueck, { finished: true, currentTurn: [] }) });
+  eq(D.getState().history.length, 1, "die eigene Partie darf nicht doppelt zaehlen");
+});
+
+t("Ein mitgehoertes Spiel zaehlt in der Duell-Bilanz", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fertig = JSON.parse(JSON.stringify(D.getMatch()));
+  fertig.finished = true; fertig.winnerId = "arne";
+  fertig.players[1].legsWon = 1;
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fertig });
+  const bilanz = D.h2h("lion", "arne");
+  eq(bilanz.n, 1, "das Duell muss gezaehlt werden - sonst nuetzt der Eintrag nichts");
+  eq(bilanz.winsB, 1, "und zwar fuer den richtigen");
+});
+
+t("Ein LAUFENDES Spiel kommt nicht in den Verlauf", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const laeuft = JSON.parse(JSON.stringify(D.getMatch()));
+  laeuft.players[0].score = 301;             // mittendrin, finished bleibt false
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: laeuft });
+  eq(D.getState().history.length, 0,
+     "sonst steht jede halbe Partie als beendetes Spiel in der Statistik");
+  eq(D.getMatch().players[0].score, 301, "gespielt wird trotzdem weiter");
+});
+
+t("Ein Spieler mit abweichender Kennung wird zugeordnet", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  const fertig = JSON.parse(JSON.stringify(D.getMatch()));
+  fertig.finished = true;
+  // Auf dem anderen Handy heisst derselbe Mensch "lionx" - das passiert, wenn
+  // dort mal ein Namensvetter existierte. Ohne Abbildung ueber den NAMEN findet
+  // die Duell-Bilanz die Partie hier nie wieder.
+  fertig.players[0].id = "lionx";
+  fertig.winnerId = "lionx";
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fertig });
+  eq(D.getState().history.length, 1);
+  eq(D.getState().history[0].players[0].id, "lion", "auf die eigene Kennung abgebildet");
+  eq(D.getState().history[0].winnerId, "lion", "auch der Sieger");
+  eq(D.h2h("lion", "arne").n, 1, "und das Duell wird gezaehlt");
+});
+
+t("Ohne Verlauf-Schalter wird auch nichts nachgetragen", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.getState().settings.keepHistory = false;
+  const fertig = JSON.parse(JSON.stringify(D.getMatch()));
+  fertig.finished = true; fertig.winnerId = "lion";
+  D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fertig });
+  eq(D.getState().history.length, 0, "wer nicht mitschreiben will, will auch das nicht");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;
