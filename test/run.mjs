@@ -1348,6 +1348,51 @@ t("Eine spaete Sendebestaetigung loest keinen Fehlalarm aus", async () => {
      "hier ist nichts von diesem Handy verloren gegangen: " + ctx.app.innerHTML.slice(-200));
 });
 
+t("Das Sync-Paket bleibt klein, auch nach langem Spiel", () => {
+  const { D } = boot();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 7 });
+  const leer = JSON.stringify(D.syncPaket()).length;
+  for (let i = 0; i < 60; i++) D.applyDart(1, (i % 20) + 1);
+  const voll = JSON.stringify(D.syncPaket()).length;
+  // Gemessen: nach 60 Wuerfen war das Paket 11.665 Bytes - davon 10.845 allein
+  // der Undo-Stapel. ntfy nimmt so etwas mit HTTP 200 an und stellt es NICHT zu
+  // (ab ~8 KB kommt beim Empfaenger ein 35-Zeichen-Platzhalter an). Der Sync
+  // waere im echten Spiel nach ein paar Runden still zusammengebrochen.
+  ok(voll < 4000, "Paket nach 60 Wuerfen: " + voll + " Bytes (Grenze 4000)");
+  ok(voll < leer * 3, "und es waechst nicht davon: " + leer + " -> " + voll);
+});
+
+t("Der Undo-Stapel geht nicht ueber die Leitung", () => {
+  const { D } = boot();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  for (let i = 0; i < 10; i++) D.applyDart(1, 5);
+  const paket = D.syncPaket();
+  ok(!("_undo" in paket.match), "_undo hat auf dem anderen Handy nichts zu suchen");
+  const roh = JSON.stringify(paket);
+  ok(!/_undo/.test(roh), "auch nicht verschachtelt");
+  // Aber lokal muss Undo weiter funktionieren. Nach 10 Wuerfen ist nicht mehr
+  // Spieler 0 dran - deshalb ueber die Summe pruefen, nicht ueber einen Namen.
+  const summe = () => D.getMatch().players.reduce((a, p) => a + p.score, 0);
+  const vor = summe();
+  D.undo();
+  ok(summe() > vor, "lokal bleibt der Rueckweg: " + vor + " -> " + summe());
+});
+
+t("Ein zu grosses Paket wird gar nicht erst losgeschickt", () => {
+  const ctx = syncBoot();
+  const D = ctx.D;
+  D.syncOeffnen("ABC123");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  // Kuenstlich aufblaehen - das darf niemals still rausgehen.
+  D.getMatch().ballast = "x".repeat(9000);
+  ctx.gesendet.length = 0;
+  D.syncSenden();
+  eq(ctx.gesendet.length, 0, "ntfy wuerde HTTP 200 melden und nichts zustellen");
+  D.setView("game"); D.render();
+  ok(/zu groß|zu gross|Abgleich/i.test(ctx.app.innerHTML),
+     "und es muss dastehen, dass der Abgleich steht");
+});
+
 t("Ohne Raum wird nichts gefunkt", () => {
   const ctx = syncBoot();
   const D = ctx.D;

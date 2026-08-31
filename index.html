@@ -324,7 +324,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.38";
+var VER    = "1.39";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -472,6 +472,8 @@ var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraend
 // sich der Abgleich selbst: ein Handy, das kurz kein Netz hatte, ist beim
 // naechsten Empfang wieder gleichauf, ohne dass jemand Ereignisse nachzaehlen muss.
 var SYNC_HOST = "https://ntfy.sh/";
+var SYNC_MAX = 4000;          // gemessene Zustellgrenze, siehe syncSenden()
+var syncZuGross = 0;          // Bytes des Pakets, das nicht rausging
 var syncRaum = null;          // Raumcode oder null
 var syncES = null;            // die offene Verbindung
 var syncUhr = 0;              // zaehlt hoch bei JEDER lokalen Aenderung
@@ -512,9 +514,23 @@ function syncTopic(code){ return "darts-" + String(code).toLowerCase(); }
 // Was ueber die Leitung geht. Bewusst nur das Spiel - nicht der ganze Speicher:
 // Verlauf, Statistik und Einstellungen bleiben auf jedem Handy privat.
 function syncPaket(){
+  var m = null;
+  if(state.match){
+    m = {};
+    for(var k in state.match){
+      // 🔴 Alles mit fuehrendem _ bleibt lokal. Gemessen: der Undo-Stapel machte
+      // 10.845 von 11.515 Bytes aus - 94 % des Pakets. ntfy nimmt so etwas mit
+      // HTTP 200 an und stellt es NICHT zu (ab ~8 KB kommt beim Empfaenger ein
+      // 35-Zeichen-Platzhalter an), also waere der Abgleich nach ein paar Runden
+      // still zusammengebrochen. Der Rueckweg ist ohnehin pro Handy eigen.
+      if(k.charAt(0) === "_") continue;
+      if(Object.prototype.hasOwnProperty.call(state.match, k)) m[k] = state.match[k];
+    }
+    m = JSON.parse(JSON.stringify(m));
+  }
   return { v:1, uhr:syncUhr, von:syncGeraeteId(),
            hoert: (typeof voiceOn !== "undefined" && voiceOn) ? syncGeraeteId() : null,
-           match: state.match ? JSON.parse(JSON.stringify(state.match)) : null };
+           match: m };
 }
 
 function syncSenden(){
@@ -525,6 +541,15 @@ function syncSenden(){
   syncVersucht = jetzt;
   var nr = syncEmpfangsNr;
   var body = JSON.stringify(syncPaket());
+  // Gemessen an ntfy: bis 4000 Bytes kommt die Nachricht an, ab ~8000 meldet der
+  // Dienst HTTP 200 und stellt trotzdem etwas anderes zu. Ein Absender, der nur
+  // auf den Statuscode schaut, haelt das fuer Erfolg. Also hier hart pruefen.
+  if(body.length > SYNC_MAX){
+    syncZuGross = body.length;
+    syncVersucht = null;
+    return false;
+  }
+  syncZuGross = 0;
   var f = syncFetch || (typeof fetch === "function" ? fetch : null);
   if(!f) return false;
   try{
@@ -676,7 +701,7 @@ function syncSchliessen(){
   if(syncES){ try{ syncES.close(); }catch(e){} }
   syncES = null; syncRaum = null; syncStatus = "aus"; syncZuletzt = null;
   syncVerworfen = false; syncVersucht = null; syncFremdeVersion = false;
-  syncHoert = null;
+  syncHoert = null; syncZuGross = 0;
 }
 function syncAn(){ return !!syncRaum; }
 
@@ -2233,7 +2258,11 @@ function syncPille(){
   if(!syncAn()) return "";
   // Die Warnung ERSETZT die Pille nicht - sonst sieht man im wichtigsten Moment
   // nicht mehr, ob ueberhaupt noch eine Verbindung steht und zu welchem Raum.
-  var warn = syncFremdeVersion
+  var warn = syncZuGross
+    ? '<div class="warnzeile">&#9888;&#65039; Der Abgleich steht: die Runde ist mit <b>'
+      + syncZuGross + ' Zeichen</b> zu groß für die Leitung. Das zweite Handy sieht '
+      + 'nichts mehr.</div>'
+    : syncFremdeVersion
     ? '<div class="warnzeile">&#9888;&#65039; Das andere Handy l&auml;uft auf einer '
       + '<b>anderen Version</b> &ndash; dort die App einmal neu laden.</div>'
     : syncVerworfen
