@@ -312,6 +312,63 @@
   .fab{margin-top:8px;}
   .hint{font-size:12px; color:var(--muted); text-align:center; margin-top:14px;}
   a{color:var(--accent);}
+
+  /* Anwurf-Rad: wer faengt an? */
+  .radwrap{text-align:center; padding:6px 0 0;}
+  .radbuehne{position:relative; width:min(78vw,300px); margin:10px auto 0; aspect-ratio:1/1;}
+  /* Zeiger und Nabe liegen ueber der Scheibe. Ohne pointer-events:none fangen
+     sie den Fingertipp ab - und zwar genau in der Mitte, wo jeder hintippt. */
+  .radzeiger{position:absolute; top:-3px; left:50%; transform:translateX(-50%);
+    width:0; height:0; border-left:11px solid transparent; border-right:11px solid transparent;
+    border-top:19px solid var(--gold); z-index:2; pointer-events:none;
+    filter:drop-shadow(0 2px 4px rgba(0,0,0,.6));}
+  .radscheibe{width:100%; height:100%; display:block; border-radius:50%;
+    box-shadow:0 8px 30px rgba(0,0,0,.45); transform:rotate(0deg);}
+  .radscheibe.dreht{transition:transform 3.4s cubic-bezier(.13,.72,.16,1);}
+  .radnabe{position:absolute; top:50%; left:50%; width:19%; height:19%;
+    transform:translate(-50%,-50%); border-radius:50%; background:var(--card);
+    border:2px solid var(--line); z-index:2; display:flex; align-items:center;
+    justify-content:center; font-size:min(6vw,22px); pointer-events:none;}
+  .radtitel{font-size:19px; font-weight:800; margin:16px 0 2px; min-height:26px;}
+  .radsub{font-size:12.5px; color:var(--muted); min-height:18px;}
+  .radtitel.fest{color:var(--gold);}
+
+  /* Madhouse: 2 Rest, nur noch die D1 geht */
+  .madhouse{text-align:center; font-size:13px; font-weight:800; letter-spacing:1.4px;
+    color:#2b1206; background:var(--gold); border-radius:11px; padding:8px 10px;
+    margin:-2px 0 10px;}
+  .turn .co.mad{color:var(--gold);}
+
+  /* Statistik: alle Zahlen nebeneinander + jeder gegen jeden */
+  .srt{display:flex; gap:6px; overflow-x:auto; margin:0 -14px 12px; padding:0 14px 2px;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;}
+  .srt::-webkit-scrollbar{display:none;}
+  .srt .chip{flex:none; padding:8px 12px; font-size:13px;}
+  .srt .chip.on{background:var(--accent); border-color:transparent; color:#08240f;}
+  .strow{display:flex; align-items:center; gap:10px; padding:11px 2px;
+    border-bottom:1px solid var(--line); cursor:pointer;}
+  .strow:last-child{border-bottom:none;} .strow:active{background:var(--card2);}
+  .strow .pos{width:22px; flex:none; font-size:13px; font-weight:800; color:var(--muted);}
+  .strow .pos.gold{color:var(--gold);}
+  .strow .nm{flex:1; min-width:0; font-size:15px; font-weight:700;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .strow .nm .star{color:var(--gold); font-size:12px;}
+  .strow .sub{display:block; font-size:11px; color:var(--muted); font-weight:600; margin-top:1px;}
+  .strow .val{flex:none; font-size:20px; font-weight:800; text-align:right;}
+  .strow .val small{display:block; font-size:10px; color:var(--muted); font-weight:600;
+    letter-spacing:.4px;}
+  .kreuz{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .kreuz table{border-collapse:collapse; width:100%; font-size:13px;}
+  .kreuz th,.kreuz td{padding:9px 6px; text-align:center; border-bottom:1px solid var(--line);
+    white-space:nowrap;}
+  .kreuz th{font-size:11px; color:var(--muted); font-weight:700;}
+  .kreuz th.who{text-align:left; font-size:13px; color:var(--text); font-weight:700;}
+  .kreuz td.self{color:var(--line);}
+  .kreuz td.zell{cursor:pointer; font-weight:800;}
+  .kreuz td.zell:active{background:var(--card2);}
+  .kreuz td.zell .w{color:var(--accent);} .kreuz td.zell .l{color:var(--muted);}
+  .kreuz td.zell i{font-style:normal; color:var(--muted); font-weight:600; margin:0 2px;}
+  .kreuz td.leer{color:var(--muted); font-weight:600;}
 </style>
 </head>
 <body>
@@ -324,13 +381,13 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.44";
+var VER    = "1.45";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
   return { gameType:501, doubleOut:true, doubleIn:false, bestOf:1,
            tts:true, keepHistory:true, meId:"lion", inputMode:"single", platzSpiel:true,
-           nurMitName:false };
+           nurMitName:false, anwurfRad:true };
 }
 function defaultState(){
   return {
@@ -419,6 +476,11 @@ function upgradeShape(s){
     if(typeof m.bestOf!=="number") m.bestOf=1;
     if(!m.legs) m.legs=[];
     if(!m.id) m.id=mid();
+    // 🔴 Ein Spiel aus einer aelteren Fassung laeuft schon - das Rad darf ihm
+    // nicht mitten in der Runde den Anwurf neu auslosen. Darum zu: das Rad gilt
+    // nur fuer Spiele, die unter dieser Fassung gestartet wurden.
+    if(typeof m.anwurfOffen!=="boolean") m.anwurfOffen=false;
+    if(typeof m.anwurfIdx!=="number" || !m.players[m.anwurfIdx]) m.anwurfIdx=null;
     m.players.forEach(function(p){
       ["legsWon","scored","best","tons","oneEighties","checkout","legDarts"].forEach(function(f){
         if(typeof p[f]!=="number") p[f]=0; });
@@ -456,7 +518,7 @@ function load(){
   }catch(e){}
   return defaultState();
 }
-var LIVE_VIEWS = ["game","leg","platz","win","train"];
+var LIVE_VIEWS = ["game","leg","platz","win","train","rad"];
 var fremdGeschrieben = false; // ein zweites Fenster hat denselben Stand veraendert
 
 // ===================================================================== Zweites Handy
@@ -660,6 +722,23 @@ function syncUebernehmen(paket){
   // dem Beitreten stand auf BEIDEN Geraeten match:null, das Spiel war weg.
   // Ein Spiel beendet man auf dem eigenen Handy, nicht ueber die Leitung.
   if(!paket.match && state.match && !state.match.finished) return "leer";
+  // 🔴 Ein Anwurf, der HIER schon ausgelost und uebernommen ist, wird ueber die
+  // Leitung nicht wieder aufgemacht. Gemessen mit zwei Handys, die gleichzeitig
+  // drehen: das spaetere Paket stellte anwurfOffen zurueck auf true, und wer
+  // schon an der Scheibe stand, stand ploetzlich nicht mehr dran. Es faellt dabei
+  // kein Dart - aber die Auslosung wird nicht zweimal gemacht.
+  if(paket.match && paket.match.anwurfOffen && state.match && !state.match.anwurfOffen
+     && state.match.id === paket.match.id){
+    // 🔴 Die Uhr MUSS mit, obwohl das Paket verworfen wird. Sonst bleibt sie hier
+    // stehen, und ab da verwirft die Gegenseite jedes eigene Paket als "aelter":
+    // beide reden, keiner hoert zu. Gemessen im Fenster davor: drei T20 (180
+    // Punkte) waren weg, sobald das andere Handy sein veraltetes Rad schloss -
+    // und zwar lautlos, weil die "Eingaben ueberschrieben"-Meldung nur
+    // UNGESENDETE Aenderungen kennt. Diese Wuerfe waren gesendet, nur ueberstimmt.
+    if(paket.uhr > syncUhr) syncUhr = paket.uhr;
+    if(!syncEmpfangend) syncSenden();      // eigenen, weiteren Stand nachschieben
+    return "anwurf";
+  }
   if(paket.uhr < syncUhr) return "aelter";
   if(paket.uhr === syncUhr && paket.von < syncGeraeteId()) return "gleichstand";
   // Gleiche Uhr heisst: beide haben zur selben Zeit etwas eingetragen. Wer hier
@@ -861,7 +940,7 @@ function save(){
 function restoreView(){
   var v = state._view;
   if(v==="train") return trainBekannt() ? "train" : "home";
-  if(v==="game" || v==="leg" || v==="platz")
+  if(v==="game" || v==="leg" || v==="platz" || v==="rad")
     return (state.match && !state.match.finished) ? v : "home";
   if(v==="win")  return (state.match && state.match.finished) ? "win" : "home";
   return "home";
@@ -878,6 +957,7 @@ var view  = "home";          // home | roster | setup | game | leg | win | h2h |
 var curMult = 1;         // aktueller Multiplikator im Zahlenfeld
 var setupSel = null;     // {selected:[ids], gameType, doubleOut, doubleIn, bestOf}
 var h2hSel = null;       // [idA, idB] im Direktvergleich
+var statsSort = "siege"; // wonach die Statistik-Rangliste gerade sortiert
 var h2hAuto = true;      // true = von der App vorbelegt, wird beim naechsten Blick neu bestimmt
 var settingsMsg = "";    // kurze Rueckmeldung im Einstellungs-Screen
 var teamMsg = "";        // kurze Rueckmeldung im Team-Screen
@@ -1130,9 +1210,102 @@ function startMatch(playerIds, opts){
     players: playerIds.map(function(id){ return freshPlayer(id, gt); }),
     currentIdx:0, startIdx:0, legNo:1,
     currentTurn:[], turnStartScore:gt, lastTurn:null,
-    legs:[], platz:[], finished:false, winnerId:null, _undo:[]
+    legs:[], platz:[], finished:false, winnerId:null, _undo:[],
+    // Wer faengt an? Bisher immer der erste in der Liste - also praktisch immer
+    // Lion. Mit mehr als einem Spieler wird das ausgelost, bevor der erste Dart
+    // faellt. Allein ueben braucht kein Rad.
+    anwurfOffen: playerIds.length>1 && state.settings.anwurfRad!==false,
+    anwurfIdx: null
   };
-  curMult = 1; view = "game"; save();
+  curMult = 1; radZuruecksetzen();
+  view = state.match.anwurfOffen ? "rad" : "game";
+  save();
+}
+function radZuruecksetzen(){
+  radGezeigt = null; radLaeuft = null; radWinkel = 0;
+  radZiel = null; radZielFuer = null;
+  if(radTimer){ clearTimeout(radTimer); radTimer = null; }
+}
+
+// ---------------------------------------------------------------------------
+// Anwurf-Rad
+//
+// Das Ergebnis faellt in JS, NICHT in der Animation - eine CSS-Transition, die
+// unterwegs abgebrochen wird (Tab-Wechsel, schwaches Handy, prefers-reduced-
+// motion), duerfte sonst darueber entscheiden, wer anfaengt. Das Rad dreht sich
+// auf ein Ergebnis zu, das schon feststeht.
+// ---------------------------------------------------------------------------
+var radGezeigt = null;    // welches Los ist fertig ausgedreht?
+var radLaeuft  = null;    // ... und fuer welches dreht sich die Scheibe gerade?
+var radWinkel  = 0;       // wo die Scheibe steht - MUSS ein Re-Render ueberleben,
+                          // sonst springt sie beim Ergebnis zurueck auf Anfang
+                          // und der Zeiger steht auf dem falschen Namen.
+var radZiel    = null;    // wohin sie faehrt (steht schon beim Losen fest)
+var radZielFuer = null;   // 🔴 zu WELCHEM Los der Zielwinkel gehoert. Ohne diese
+                          // Bindung blieb er stehen, wenn das andere Handy ein
+                          // anderes Los durchsetzte: der Zeiger landete sichtbar
+                          // auf einem Namen, waehrend die Ueberschrift einen
+                          // anderen nannte.
+var radTimer   = null;
+var RAD_MS     = 3400;    // muss zur .radscheibe.dreht-Transition passen
+
+function radLosen(){
+  var m = state.match;
+  if(!m || !m.anwurfOffen || m.anwurfIdx!==null) return false;
+  m.anwurfIdx = zufallsIndex(m.players.length);
+  save(); render();
+  return true;
+}
+
+// Wohin die Scheibe faehrt. Steht fest, sobald ein Los da ist - egal ob es hier
+// gefallen ist oder ueber die Leitung kam. renderRad richtet die Namen danach
+// aus, damit der Ausgeloste am Ende aufrecht unter dem Zeiger steht; wuerde der
+// Winkel erst in der Animation gewuerfelt, spraenge die Beschriftung genau in
+// dem Moment um, in dem das Rad haelt.
+function radZielWinkel(m){
+  if(!m || typeof m.anwurfIdx !== "number" || !m.players[m.anwurfIdx]) return null;
+  var marke = m.anwurfIdx + "|" + m.id;
+  if(radZielFuer === marke && radZiel !== null) return radZiel;
+  var schritt = 360/m.players.length;
+  var mitte = (m.anwurfIdx + 0.5) * schritt;
+  // Innerhalb des Stuecks etwas streuen, sonst steht es jedes Mal exakt mittig
+  // und die Drehung sieht gestellt aus.
+  radZiel = 360*5 - mitte + (Math.random()-0.5) * schritt * 0.6;
+  radZielFuer = marke;
+  return radZiel;
+}
+
+// Getrennt, damit der Test das Los setzen kann, ohne den Zufall zu wuerfeln.
+function zufallsIndex(n){
+  try{
+    if(window.crypto && window.crypto.getRandomValues){
+      var a = new Uint32Array(1);
+      // Der Rest von 2^32 durch n verzerrt das Ergebnis. Bei drei Spielern sind
+      // das 0,00000002 % - egal. Trotzdem sauber: Ausreisser neu ziehen.
+      var grenze = Math.floor(4294967296 / n) * n;
+      for(var i=0;i<8;i++){
+        window.crypto.getRandomValues(a);
+        if(a[0] < grenze) return a[0] % n;
+      }
+      return a[0] % n;
+    }
+  }catch(e){}
+  return Math.floor(Math.random()*n);
+}
+
+// Das Los anwenden: der Ausgeloste faengt an - und bleibt bei Best-of auch der,
+// von dem aus der Anwurf weiterwandert.
+function radUebernehmen(){
+  var m = state.match;
+  if(!m || !m.anwurfOffen) return;
+  var i = (typeof m.anwurfIdx==="number" && m.players[m.anwurfIdx]) ? m.anwurfIdx : 0;
+  m.anwurfOffen = false;
+  m.startIdx = i; m.currentIdx = i;
+  m.turnStartScore = m.players[i].score;
+  m.currentTurn = []; curMult = 1;
+  radZuruecksetzen();
+  view = "game"; save(); render();
+  say(m.players[i].name + " fängt an. " + wegText(m.players[i]));
 }
 
 // Alles, was ein Undo wiederherstellen muss - an EINER Stelle. Wer hier ein Feld
@@ -1182,24 +1355,36 @@ function closeTurn(kind){
       id:p.id, name:p.name, kind:kind||"ok", sum:Math.max(0,got), rest:p.score,
       labels:m.currentTurn.map(function(d){return d.label;})
     };
+    return true;
   }
+  // 🔴 Rueckgabe: wurde in DIESER Aufnahme etwas gebucht? Ohne die Antwort sagt
+  // ein "Aufnahme beenden" ohne Wurf die Aufnahme des VORGAENGERS noch einmal an -
+  // lastTurn steht dann ja unveraendert da.
+  return false;
 }
 var quietSay = false;   // true, solange der Sprachmodus selbst ansagt
+var wechselAnsage = "";      // was beim letzten Spielerwechsel zu sagen war
+var wechselKurz   = "";      // davon: das Ergebnis der beendeten Aufnahme
+var wechselDran   = "";      // davon: wer jetzt dran ist und worauf er zielt
+var madhouseAnsage = false;  // ... und ob dabei ein Madhouse entstanden ist
 
-// Ansage nach der Aufnahme: "Arne 105, Rest 396" bzw. "Ueberworfen".
-// Genau das, was man beim Darts sowieso laut sagt.
-function sayLastTurn(){
-  if(quietSay) return;
-  var lt = state.match && state.match.lastTurn; if(!lt) return;
-  if(lt.kind==="bust")         say(lt.name+". Überworfen. Zurück auf "+lt.rest);
-  else if(lt.kind==="nostart") say("Noch kein Doppel");
-  else if(lt.kind==="ok" && lt.labels.length){
-    // Nach der Aufnahme gleich sagen, worauf man sich stellt - beim weggelegten
-    // Handy ist das der halbe Nutzen des Sprachmodus.
-    var rat = state.match ? ratText(lt.rest, 3, state.match.doubleOut) : "";
-    say(lt.name+" "+lt.sum+". Rest "+lt.rest+(rat?". "+rat:""));
-  }
+// Ansage NACH der Aufnahme - nur noch das Ergebnis: "Arne 105, Rest 396".
+//
+// Bis 1.44 hing hier der Finishweg dran. Der kam damit vier Aufnahmen zu frueh:
+// wer gerade geworfen hat, braucht ihn nicht, und bis er wieder an der Scheibe
+// steht, hat er ihn vergessen. Der Weg gehoert an den Anfang der eigenen
+// Aufnahme, nicht ans Ende - siehe dranText().
+function lastTurnText(){
+  var lt = state.match && state.match.lastTurn; if(!lt) return "";
+  if(lt.kind==="bust")   return lt.name+". Überworfen. Zurück auf "+lt.rest+".";
+  if(lt.kind==="nostart") return "Noch kein Doppel.";
+  if(lt.kind==="ok" && lt.labels.length) return lt.name+" "+lt.sum+". Rest "+lt.rest+".";
+  return "";
 }
+
+// Madhouse: Rest 2 bei Doppel-Out - es geht nur noch die D1, das kleinste Feld
+// auf der Scheibe. Beim Darts hat das einen Namen, also bekommt es einen.
+function istMadhouse(rest, doubleOut){ return !!doubleOut && rest === 2; }
 
 // Was jetzt sinnvoll ist - Finish oder Stellen. Wird an die Ansage angehaengt,
 // damit man beim weggelegten Handy weiss, worauf man zielt.
@@ -1214,14 +1399,33 @@ function ratText(rest, dartsLeft, doubleOut){
            + zielName(st.ziel, doubleOut).replace(" (D", ", Doppel ").replace(")", "");
   return "";
 }
-// "Arne ist dran" allein hilft dem nicht, der an der Scheibe steht und das Handy
-// weggelegt hat. Rest und Finish gehoeren dazu - das ist der ganze Sinn der Ansage.
+// Rest und Weg des Spielers, der JETZT an die Scheibe geht. Ohne den Weg ist
+// "Arne ist dran" fuer den, der das Handy weggelegt hat, keine Information.
+function wegText(p){
+  var m = state.match; if(!m || !p) return "";
+  if(istMadhouse(p.score, m.doubleOut)) return "2. Madhouse. Doppel 1.";
+  var r = ratText(p.score, 3, m.doubleOut);
+  return r ? p.score + ". " + r : "" + p.score;
+}
 function dranText(){
   var m = state.match; if(!m) return "";
   var p = m.players[m.currentIdx];
-  var t = p.name + " ist dran. " + p.score;
-  var r = ratText(p.score, 3, m.doubleOut);
-  return r ? t + ". " + r : t;
+  var t = p.name + " ist dran. " + wegText(p);
+  return /[.!?]$/.test(t) ? t : t + ".";
+}
+
+// Was beim Spielerwechsel gesagt wird: kurz das Ergebnis der Aufnahme, die
+// gerade zu Ende ging - und dann der Weg fuer den, der jetzt drankommt.
+// Beides in EINEM Satz, weil say() jede laufende Ansage abbricht: zwei Aufrufe
+// hintereinander wuerden das Ergebnis verschlucken.
+// Die drei Teile stehen als Variablen bereit, weil der Sprachmodus sie nach
+// endTurn() noch einmal braucht - mit eigenem Vorsatz („Okay.", „Nächster.").
+function wechselTexteSetzen(gebucht){
+  wechselKurz   = gebucht ? lastTurnText() : "";
+  wechselDran   = dranText();
+  wechselAnsage = wechselKurz ? (wechselDran ? wechselKurz + " " + wechselDran : wechselKurz)
+                              : wechselDran;
+  return wechselAnsage;
 }
 
 // Der Fehlwurf heisst intern "&#10007;". Als Vorschlag im Satz („sag ✗ raus")
@@ -1238,12 +1442,34 @@ function sagbar(label){
 
 function endTurn(kind){
   var m = state.match;
-  closeTurn(kind);
-  sayLastTurn();
+  var vorher = m.turnStartScore;              // Rest VOR dieser Aufnahme
+  var gebucht = closeTurn(kind);
+  // Madhouse nur, wenn es GERADE entstanden ist. Wer auf der 2 haengen bleibt,
+  // bekommt sonst bei jeder Aufnahme denselben Ruf - beim dritten Mal ist er
+  // nur noch laut. Dass er auf 2 steht, sagt ihm dranText() trotzdem weiter.
+  madhouseAnsage = !!(gebucht && m.lastTurn && istMadhouse(m.lastTurn.rest, m.doubleOut)
+                      && !istMadhouse(vorher, m.doubleOut));
   m.currentTurn = [];
   m.currentIdx = naechsterDran(m);
   m.turnStartScore = m.players[m.currentIdx].score;
   curMult = 1;
+  wechselTexteSetzen(gebucht);
+  if(!quietSay) sagWechsel();
+}
+
+// Die Wechsel-Ansage aussprechen - mit dem Madhouse-Ruf dazwischen, in der
+// Kommentatorenlage. Eigene Utterance, weil sich Tempo und Sprache nur pro
+// Utterance setzen lassen; darum laeuft sie ueber die Warteschlange und nicht
+// ueber zwei say()-Aufrufe, von denen der zweite den ersten abschiessen wuerde.
+function sagWechsel(vorsatz){
+  if(!wechselAnsage && !madhouseAnsage) return;
+  var v = vorsatz ? vorsatz + " " : "";
+  if(!madhouseAnsage){ say(v + wechselAnsage); return; }
+  var teile = [];
+  if(v || wechselKurz) teile.push({text:v + wechselKurz});
+  teile.push({text:"Mad house!", lang:"en-US", rate:0.62, pitch:0.5});
+  if(wechselDran) teile.push({text:wechselDran});
+  sagFolge(teile);
 }
 
 // Wer sein Spiel schon ausgemacht hat, kommt nicht mehr dran - sonst wuerde der
@@ -1311,6 +1537,11 @@ function winLeg(p){
 // Rueckgabe: ok | bust | leg | win | nostart | noop
 function applyDart(mult, num){
   var m = state.match; if(!m || m.finished) return "noop";
+  // Solange der Anwurf nicht ausgelost ist, wird nichts gebucht. Das Zahlenfeld
+  // steht auf dem Rad-Bildschirm zwar nicht da - aber ueber das Mikro (oder ein
+  // zweites Handy, das noch auf "game" steht) kaeme sonst ein Wurf herein, bevor
+  // feststeht, wer ueberhaupt anfaengt.
+  if(m.anwurfOffen) return "noop";
   if(wartetAufOk()){
     // Zu zweit sagt einer an und der andere tippt. Wer hier tippte, bekam bisher
     // gar keine Rueckmeldung - der Knopf sah normal aus, es passierte nur nichts.
@@ -1544,17 +1775,20 @@ function renderHome(){
     + (resume ? '<div style="margin-bottom:12px">'+resume+'</div>' : '')
     + '<div class="card" style="margin-bottom:14px"><div style="font-size:13px;color:var(--muted);'
       + 'font-weight:700;margin-bottom:4px;display:flex;justify-content:space-between">'
-      + '<span>RANGLISTE</span>'
-      + '<span data-act="nav" data-view="roster" style="font-weight:600">Team &rsaquo;</span></div>'
+      + '<span>TEAM-RANGLISTE</span>'
+      + '<span data-act="nav" data-view="stats" style="font-weight:600">alle Zahlen &rsaquo;</span></div>'
       + rows + '</div>'
     + duelCard()
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
     + '<div class="row">'
     +   '<button class="btn" data-act="nav" data-view="h2h" style="flex:1">&#9876;&#65039;&nbsp; Duelle</button>'
-    +   '<button class="btn" data-act="nav" data-view="solo" style="flex:1">&#127919;&nbsp; Allein üben</button>'
+    +   '<button class="btn" data-act="nav" data-view="stats" style="flex:1">&#128202;&nbsp; Statistik</button>'
     + '</div>'
-    + '<button class="btn ghost" data-act="nav" data-view="roster">&#128101;&nbsp; Team &amp; Wins</button>'
+    + '<div class="row">'
+    +   '<button class="btn ghost" data-act="nav" data-view="solo" style="flex:1">&#127919;&nbsp; Allein üben</button>'
+    +   '<button class="btn ghost" data-act="nav" data-view="roster" style="flex:1">&#128101;&nbsp; Team</button>'
+    + '</div>'
     + '</div>'
     + '<div class="hint">'
       + (speicherKaputt
@@ -1715,7 +1949,7 @@ var AUFNAHME_MOEGLICH = (function(){
 // false = ausdruecklich ohne. Ohne diese Unterscheidung war Doppel-In im
 // Summen-Modus schlicht wirkungslos, waehrend der Schirm das Gegenteil behauptete.
 function applyTurnSum(sum, dartsUsed, opened){
-  var m = state.match; if(!m || m.finished) return "noop";
+  var m = state.match; if(!m || m.finished || m.anwurfOffen) return "noop";
   sum = Math.round(sum);
   if(!(sum>=0 && sum<=180) || !AUFNAHME_MOEGLICH[sum]) return "ungueltig";
   var p = m.players[m.currentIdx];
@@ -1855,8 +2089,10 @@ function renderGame(){
   var stell = (co || (m.doubleIn && cur.legStart))
     ? null : stellEmpfehlung(cur.score, rest3, m.doubleOut);
   if(!stellNuetzlich(stell, rest3, m.doubleOut)) stell = null;
+  var mad = istMadhouse(cur.score, m.doubleOut) && !(m.doubleIn && cur.legStart);
   var coHtml;
   if(m.doubleIn && cur.legStart) coHtml = '<span class="co">Doppel-In: erst ein Doppel eröffnet</span>';
+  else if(mad)   coHtml = '<span class="co mad">Madhouse: nur noch D1</span>';
   else if(co)    coHtml = '<span class="co">Finish: '+co.join(" ")+'</span>';
   else if(stell) coHtml = '<span class="co stell">Stellen: <b>'+stell.label+'</b> &rarr; '
                           + stell.ziel + zielName(stell.ziel, m.doubleOut)+'</span>';
@@ -1876,6 +2112,8 @@ function renderGame(){
                    : '<span class="sum">Aufnahme: <b>'+turnSum+'</b></span>')
     + '</div>'
     + '</div>'
+    + (mad ? '<div class="madhouse">&#127917; MADHOUSE &middot; '+esc(cur.name)
+             + ' braucht die D1</div>' : '')
     + versionsHinweis()
     + syncPille()
     + (wartetAufOk()
@@ -1915,6 +2153,140 @@ function renderGame(){
     + 'Sag z.B. „<b>Triple 20, 20, Doppel 5</b>" &middot; „Bull" &middot; „daneben" &middot; „<b>zurück</b>"</div>'
     + '</div>'
     + '<button class="btn ghost danger sm" data-act="quit" style="width:auto;margin:12px auto 0">Spiel abbrechen</button>';
+}
+
+// ---------------------------------------------------------------------------
+// Das Anwurf-Rad auf dem Schirm
+//
+// Ein Kuchenstueck je Spieler, der Zeiger steht oben auf 12 Uhr. Gedreht wird
+// die Scheibe, nicht der Zeiger: so landet das Stueck des Ausgelosten unter
+// dem Zeiger, statt dass der Zeiger irgendwo hinfaehrt.
+// ---------------------------------------------------------------------------
+var RAD_FARBEN = ["#22c55e","#60a5fa","#f5c451","#e5484d","#a78bfa","#f97316"];
+
+// Kuchenstueck als SVG-Pfad. Winkel in Grad, 0 = 12 Uhr, im Uhrzeigersinn.
+function radSektor(von, bis, r){
+  function pt(g){
+    var b = (g-90) * Math.PI/180;
+    return (50 + r*Math.cos(b)).toFixed(3) + " " + (50 + r*Math.sin(b)).toFixed(3);
+  }
+  var gross = (bis-von) > 180 ? 1 : 0;
+  return "M 50 50 L " + pt(von) + " A "+r+" "+r+" 0 "+gross+" 1 " + pt(bis) + " Z";
+}
+
+// 🔴 Der Name liegt laengs im Stueck und dreht mit der Scheibe MIT. Ob er auf dem
+// Kopf steht, entscheidet darum seine Lage NACH der Drehung, nicht die im
+// Ruhezustand. Gemessen: mit der naiven Regel (nur `mitte` betrachten) stand der
+// Ausgeloste am Ende verkehrt herum unter dem Zeiger - genau da, wo man hinsieht.
+// Rueckgabe: der Winkel, mit dem der Text im gedrehten Rad gezeichnet wird.
+function radNameWinkel(mitte, stand){
+  var abs = (((mitte + stand) % 360) + 360) % 360;
+  return (abs > 90 && abs < 270) ? mitte + 180 : mitte;
+}
+
+function renderRad(){
+  var m = state.match, n = m.players.length;
+  var schritt = 360/n;
+  var ziellage = radZielWinkel(m);       // null, solange kein Los gefallen ist
+  var sektoren = m.players.map(function(p,i){
+    var f = RAD_FARBEN[i % RAD_FARBEN.length];
+    // Zwei Spieler ergeben zwei Halbkreise - ein 180-Grad-Bogen ist als
+    // einzelner Pfad mehrdeutig, darum in zwei Vierteln gezeichnet.
+    var teile = schritt > 180
+      ? [radSektor(i*schritt, i*schritt+schritt/2, 50),
+         radSektor(i*schritt+schritt/2, (i+1)*schritt, 50)]
+      : [radSektor(i*schritt, (i+1)*schritt, 50)];
+    return teile.map(function(d){
+      return '<path d="'+d+'" fill="'+f+'" stroke="#0f1115" stroke-width="0.6"/>';
+    }).join("");
+  }).join("");
+  var namen = m.players.map(function(p,i){
+    var mitte = (i+0.5)*schritt;
+    var b = (mitte-90) * Math.PI/180;
+    var x = (50 + 31*Math.cos(b)).toFixed(2), y = (50 + 31*Math.sin(b)).toFixed(2);
+    // Gegen die ZIEL-Lage ausrichten, nicht gegen die aktuelle: sonst steht bei
+    // einem Los, das ueber die Leitung kam oder einen Reload ueberlebt hat, im
+    // ersten Render alles nach der Ruhelage - inklusive des Ausgelosten selbst.
+    var dreh = radNameWinkel(mitte, ziellage !== null ? ziellage : radWinkel);
+    return '<text x="'+x+'" y="'+y+'" fill="#0b0e13" font-size="6.4" font-weight="800"'
+      + ' text-anchor="middle" dominant-baseline="central"'
+      + ' transform="rotate('+dreh.toFixed(2)+' '+x+' '+y+')">'
+      + esc(p.name.length>9 ? p.name.slice(0,8)+"…" : p.name) + '</text>';
+  }).join("");
+
+  var los = typeof m.anwurfIdx === "number" && m.players[m.anwurfIdx];
+  var fertig = los && radGezeigt === m.anwurfIdx + "|" + m.id;
+  var titel, sub;
+  if(!los){        titel = "Wer fängt an?";  sub = "Rad antippen"; }
+  else if(!fertig){ titel = "&hellip;";      sub = "&nbsp;"; }
+  else {            titel = esc(m.players[m.anwurfIdx].name) + " fängt an";
+                    sub = "Anwurf ausgelost"; }
+
+  return h()
+    + '<div class="radwrap">'
+    +   '<div class="radbuehne">'
+    +     '<div class="radzeiger"></div>'
+    +     '<svg class="radscheibe" id="radscheibe" viewBox="0 0 100 100" data-act="raddreh"'
+    +       ' style="transform:rotate('+radWinkel.toFixed(2)+'deg)"'
+    +       ' role="img" aria-label="Anwurf auslosen">'
+    +       sektoren + namen
+    +     '</svg>'
+    +     '<div class="radnabe">&#127919;</div>'
+    +   '</div>'
+    +   '<div class="radtitel'+(fertig?" fest":"")+'">'+titel+'</div>'
+    +   '<div class="radsub">'+sub+'</div>'
+    + '</div>'
+    // 🔴 Drei Lagen, drei Knopf-Saetze. Der Nebenknopf hiess frueher immer
+    // "Ohne Rad starten" - hat aber, sobald ein Los gefallen war, genau dieses
+    // Los uebernommen. Waehrend der Drehung war er sogar der einzige Knopf: wer
+    // die Animation abkuerzen wollte, musste eine Aufschrift druecken, die luegt.
+    + '<div class="stack" style="margin-top:18px">'
+    +   (fertig
+        ? '<button class="btn primary" data-act="radweiter">Los geht\'s &#127919;</button>'
+        : los
+        ? '<button class="btn primary" data-act="radweiter">Überspringen &#8594;</button>'
+        : '<button class="btn primary" data-act="raddreh">&#127922;&nbsp; Rad drehen</button>'
+          + '<button class="btn ghost sm" data-act="radohne">Ohne Rad starten &middot; '
+          + esc(m.players[0].name) + ' fängt an</button>')
+    + '</div>'
+    + '<div class="hint">Das Rad lässt sich in den Einstellungen abschalten.</div>';
+}
+
+// Steht das Rad gerade auf dem Bildschirm? Dieselbe Bedingung wie in render().
+function radSichtbar(){
+  return !!(state.match && !state.match.finished && state.match.anwurfOffen
+            && (view==="rad" || view==="game"));
+}
+
+// Die Drehung selbst. Sie faellt NICHT das Los - das steht in m.anwurfIdx schon
+// fest, die Scheibe faehrt es nur an.
+function radAnimieren(){
+  var m = state.match;
+  if(!m || !m.anwurfOffen || typeof m.anwurfIdx !== "number") return;
+  var marke = m.anwurfIdx + "|" + m.id;
+  if(radGezeigt === marke || radLaeuft === marke) return;   // laeuft schon oder ist durch
+  var el = document.getElementById("radscheibe");
+  if(!el){ radGezeigt = marke; return; }              // kein DOM (Test): sofort fertig
+  var ziel = radZielWinkel(m);          // an das Los gebunden, siehe dort
+  if(ziel === null) return;
+  radLaeuft = marke;
+  try{
+    el.classList.add("dreht");
+    // Ein Frame Abstand, sonst fasst der Browser Start- und Zielwert zusammen
+    // und die Scheibe springt ohne Drehung auf das Ergebnis.
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){ el.style.transform = "rotate("+ziel.toFixed(2)+"deg)"; });
+    });
+  }catch(e){ }
+  if(radTimer) clearTimeout(radTimer);
+  radTimer = setTimeout(function(){
+    radTimer = null; radLaeuft = null; radGezeigt = marke;
+    radWinkel = ziel % 360;              // der neue Ruhepunkt der Scheibe
+    // Nur nachzeichnen, wenn das Rad ueberhaupt noch auf dem Schirm ist. Sonst
+    // baut ein Nachzuegler-Timer einen fremden Bildschirm neu auf - und ein
+    // Eingabefeld, in das gerade jemand tippt, waere leer.
+    if(radSichtbar()) render();
+  }, RAD_MS);
 }
 
 function renderLeg(){
@@ -2102,6 +2474,119 @@ function nameOf(id){
     for(var j=0;j<ps.length;j++) if(ps[j].id===id && ps[j].name) return ps[j].name;
   }
   return id;
+}
+
+// ---------------------------------------------------------------------------
+// Statistik: dieselben Leute, drei Blickwinkel
+//   1. Team      - wer hat wie oft gewonnen (die Rangliste von der Startseite)
+//   2. Kreuz     - meine Bilanz gegen JEDEN einzelnen
+//   3. Zahlen    - Schnitt, beste Aufnahme, hoechstes Finish ... nebeneinander
+//
+// Die Kreuztabelle zaehlt ALLE gemeinsamen Spiele, auch die zu dritt. Eine reine
+// Duell-Tabelle waere bei drei Leuten, die meistens zu dritt spielen, leer - und
+// genau die Frage "wie steh ich gegen die anderen" bliebe unbeantwortet. Das
+// reine 1-gegen-1 steht weiter im Duell-Screen.
+// ---------------------------------------------------------------------------
+var STAT_MASS = [
+  {k:"siege",    kurz:"Siege",   einheit:"WINS",  hol:function(s,id){ return totalWins(id); }},
+  {k:"quote",    kurz:"Quote",   einheit:"%",     hol:function(s){ return s.quote; }},
+  {k:"avg",      kurz:"Schnitt", einheit:"Ø 3D",  hol:function(s){ return s.avg; }},
+  {k:"best",     kurz:"Beste Aufnahme", einheit:"PKT", hol:function(s){ return s.best; }},
+  {k:"checkout", kurz:"Höchstes Finish", einheit:"PKT", hol:function(s){ return s.checkout; }},
+  {k:"t180",     kurz:"180er",   einheit:"×",     hol:function(s){ return s.t180; }},
+  {k:"games",    kurz:"Spiele",  einheit:"STK",   hol:function(s){ return s.games; }}
+];
+function statMass(k){
+  for(var i=0;i<STAT_MASS.length;i++) if(STAT_MASS[i].k===k) return STAT_MASS[i];
+  return STAT_MASS[0];
+}
+
+// Bilanz aus ALLEN gemeinsamen Spielen (Duelle + Runden zu dritt).
+function gesamtBilanz(idA, idB){
+  var r = h2h(idA, idB);
+  return { n: r.n + r.multiN, winsA: r.winsA + r.multiA, winsB: r.winsB + r.multiB,
+           duelle: r.n, duellA: r.winsA, duellB: r.winsB };
+}
+
+function renderStats(){
+  var mass = statMass(statsSort);
+  var leute = state.roster.slice();
+  var werte = {};
+  leute.forEach(function(p){ werte[p.id] = playerStats(p.id); });
+  leute.sort(function(a,b){
+    return (mass.hol(werte[b.id], b.id) - mass.hol(werte[a.id], a.id))
+        || (totalWins(b.id) - totalWins(a.id))
+        || a.name.localeCompare(b.name);
+  });
+  var spitze = leute.length ? mass.hol(werte[leute[0].id], leute[0].id) : 0;
+
+  var chips = STAT_MASS.map(function(x){
+    return '<button class="chip'+(x.k===statsSort?" on":"")+'" data-act="statsort" data-k="'+x.k+'">'
+      + x.kurz + '</button>';
+  }).join("");
+
+  var liste = leute.map(function(p,i){
+    var s = werte[p.id], v = mass.hol(s, p.id);
+    return '<div class="strow" data-act="openplayer" data-id="'+p.id+'">'
+      + '<div class="pos'+(i===0&&spitze>0?" gold":"")+'">'+(i+1)+'</div>'
+      + '<div class="nm">'+(p.id===meId()?'<span class="star">&#9733;</span> ':'')+esc(p.name)
+      +   (p.guest?'<span class="badge">Gast</span>':'')
+      +   '<span class="sub">'+s.games+(s.games===1?' Spiel':' Spiele')
+      +     (s.games?' &middot; '+s.quote+' % gewonnen':'')
+      +     (s.avg?' &middot; Ø '+s.avg:'')+'</span>'
+      + '</div>'
+      + '<div class="val">'+(v||'&mdash;')+'<small>'+mass.einheit+'</small></div>'
+      + '</div>';
+  }).join("");
+
+  // Kreuztabelle - nur sinnvoll ab zwei Leuten.
+  var kreuz = "";
+  if(leute.length >= 2){
+    var kopf = '<tr><th class="who">Bilanz</th>'
+      + leute.map(function(p){ return '<th>'+esc(kurzName(p.name))+'</th>'; }).join("")
+      + '</tr>';
+    var zeilen = leute.map(function(a){
+      return '<tr><th class="who">'+esc(a.name)+'</th>'
+        + leute.map(function(b){
+            if(a.id===b.id) return '<td class="self">&mdash;</td>';
+            var g = gesamtBilanz(a.id, b.id);
+            if(!g.n) return '<td class="leer">·</td>';
+            return '<td class="zell" data-act="h2hopen" data-a="'+a.id+'" data-b="'+b.id+'">'
+              + '<span class="'+(g.winsA>=g.winsB?"w":"l")+'">'+g.winsA+'</span><i>:</i>'
+              + '<span class="'+(g.winsB>g.winsA?"w":"l")+'">'+g.winsB+'</span></td>';
+          }).join("")
+        + '</tr>';
+    }).join("");
+    kreuz = '<label class="lbl" style="margin-top:18px">Jeder gegen jeden</label>'
+      + '<div class="card"><div class="kreuz"><table>'+kopf+zeilen+'</table></div>'
+      + '<div class="duelfuss">Zeile gegen Spalte, aus allen gemeinsamen Spielen &ndash; '
+      + 'auch denen zu dritt. Tippen öffnet den Direktvergleich.</div></div>';
+  }
+
+  var gesamtSpiele = state.history.filter(function(m){
+    return m.players && m.players.length>1; }).length;
+
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<div class="srt">'+chips+'</div>'
+    + '<div class="card">'+(liste || '<div class="duelfuss">Noch niemand im Team.</div>')+'</div>'
+    + kreuz
+    + '<div class="hint" style="text-align:left">'
+      + (gesamtSpiele ? gesamtSpiele+(gesamtSpiele===1?' gespieltes Spiel':' gespielte Spiele')
+                        + ' in den Zahlen. Von Hand eingetragene Wins zählen nur bei <b>Siege</b>.'
+                      : 'Noch kein Spiel gezählt &ndash; die Zahlen füllen sich beim Spielen.')
+    + '</div>'
+    + '<div class="stack" style="margin-top:14px">'
+    +   '<button class="btn" data-act="nav" data-view="h2h">&#9876;&#65039;&nbsp; Duell im Detail</button>'
+    +   '<button class="btn ghost" data-act="nav" data-view="roster">&#128101;&nbsp; Team &amp; Wins</button>'
+    + '</div>';
+}
+
+// Fuer die Spaltenkoepfe der Kreuztabelle - "Justus" passt dort nicht neben
+// zwei weitere Spalten.
+function kurzName(n){
+  n = String(n||"");
+  return n.length > 5 ? n.slice(0,4) + "." : n;
 }
 
 function renderH2H(){
@@ -2463,13 +2948,17 @@ function renderSettings(){
     + '<div style="height:8px"></div>'
     + toggle("s_platz", st.platzSpiel!==false, "Ab drei Leuten Platz 2 ausspielen",
              "Wer ausgemacht hat, ist durch &ndash; die anderen spielen den Rest aus")
+    + '<div style="height:8px"></div>'
+    + toggle("s_rad", st.anwurfRad!==false, "Anwurf auslosen",
+             "Vor dem ersten Dart dreht ein Rad aus, wer anfängt")
 
     + '<label class="lbl" style="margin-top:16px">Sprache</label>'
     + toggle("s_name", !!st.nurMitName, "Bei Musik: Name muss dabei sein",
              "Dann zählt nur „Arne Triple 20“ &ndash; ein Songtext sagt nie deinen Namen")
     + '<div style="height:8px"></div>'
     + toggle("s_tts", !!st.tts, "Aufnahme laut ansagen",
-             "Nach jeder Aufnahme: Punkte und Rest &middot; im Spiel auch über das Lautsprecher-Symbol")
+             "Nach der Aufnahme nur Punkte und Rest &ndash; der Weg zum Finish kommt, "
+             + "wenn du wieder dran bist &middot; im Spiel auch über das Lautsprecher-Symbol")
 
     + '<label class="lbl" style="margin-top:16px">Verlauf</label>'
     + toggle("s_hist", st.keepHistory!==false, "Spiele mitschreiben",
@@ -2833,16 +3322,24 @@ function renderPlayer(){
 
 function render(){
   syncNachfassen();      // faengt Aenderungen, die kein save() ausgeloest haben
-  if(view!=="game" && view!=="leg" && view!=="platz"
-     && typeof voiceOn!=="undefined" && voiceOn) stopVoice();  // Mikro bleibt zwischen den Runden an
+  // Mikro bleibt zwischen den Runden an - auch auf dem Anwurf-Rad. Gemessen:
+  // ohne "rad" in dieser Liste ging es nach JEDEM neuen Spiel aus, und
+  // hoheitMelden() gab es dabei ans andere Handy ab.
+  if(view!=="game" && view!=="leg" && view!=="platz" && view!=="rad"
+     && typeof voiceOn!=="undefined" && voiceOn) stopVoice();
   var el = document.getElementById("app");
   var html;
-  if(view==="game" && state.match && !state.match.finished) html = renderGame();
+  // Das Rad hat Vorrang vor dem Board: solange der Anwurf nicht ausgelost ist,
+  // darf niemand werfen - sonst entscheidet der erste Dart, wer angefangen hat.
+  if((view==="rad" || view==="game") && state.match && !state.match.finished
+     && state.match.anwurfOffen) html = renderRad();
+  else if(view==="game" && state.match && !state.match.finished) html = renderGame();
   else if(view==="leg" && state.match && !state.match.finished) html = renderLeg();
   else if(view==="platz" && state.match && !state.match.finished) html = renderPlatz();
   else if(view==="win" && state.match && state.match.finished) html = renderWin();
   else if(view==="roster") html = renderRoster();
   else if(view==="h2h") html = renderH2H();
+  else if(view==="stats") html = renderStats();
   else if(view==="settings") html = renderSettings();
   else if(view==="solo") html = renderSolo();
   else if(view==="player") html = renderPlayer();
@@ -2863,6 +3360,10 @@ function render(){
     : '') + html;
   window.scrollTo(0,0);
   if(view==="game") updateVoiceStatus();
+  // Nur wenn das Rad wirklich auf dem Schirm steht. Sonst setzt ein Render aus
+  // einer anderen Ansicht (Einstellungen antippen) die Marke, ohne dass sich je
+  // etwas gedreht hat - danach zeigt das Rad sofort das Ergebnis.
+  if(radSichtbar()) radAnimieren();
   bildschirmWach(LIVE_VIEWS.indexOf(view)>=0);
 }
 
@@ -2877,18 +3378,61 @@ var speaking = false;
 var voiceMsg = "";
 
 // -- Sprach-Ausgabe (damit man bei weggelegtem Handy HOERT, was erkannt wurde)
-function say(txt){
+function say(txt){ sagFolge([{text:txt}]); }
+
+// Mehrere Ansagen hintereinander - z.B. Ergebnis, dann der Madhouse-Ruf in
+// anderer Lage, dann der naechste Spieler.
+//
+// 🔴 speechSynthesis.cancel() leert die GANZE Schlange, nicht nur die laufende
+// Ansage. Zwei say()-Aufrufe nacheinander sind darum kein Nacheinander, sondern
+// ein Ueberschreiben: der erste Satz wird abgeschnitten. Deshalb wird EINMAL
+// abgebrochen und danach alles am Stueck eingereiht.
+// teile: [{text, lang?, rate?, pitch?}]
+var sagLauf = 0;   // zaehlt die Ansage-Folgen - siehe unten
+
+function sagFolge(teile){
+  teile = (teile||[]).filter(function(x){ return x && x.text; });
+  if(!teile.length) return;
   if(!ttsOn || !("speechSynthesis" in window)) return;
+  // 🔴 Jede Folge bekommt eine Nummer, und nur Handler der AKTUELLEN Nummer
+  // duerfen den Echo-Schutz wieder aufheben. Ohne das raeumten die onend der
+  // gerade abgebrochenen Ansage das frisch gesetzte speaking sofort wieder ab -
+  // sie feuern asynchron, also NACH dem Neustart. Das Mikro schriebe dann die
+  // eigene Ansage mit, und in der steht seit 1.45 ein Finishweg ("... Doppel
+  // 20") plus "Zurueck auf 60" - der Parser liest daraus einen Wurf und ein
+  // "zurueck". Aus demselben Grund steht speaking VOR cancel().
+  var lauf = ++sagLauf;
   try{
-    speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance(txt);
-    u.lang = "de-DE"; u.rate = 1.05;
     speaking = true;                                   // eigenes Echo nicht mitschreiben
-    u.onend  = function(){ speaking = false; };
-    u.onerror= function(){ speaking = false; };
-    speechSynthesis.speak(u);
-    setTimeout(function(){ speaking = false; }, Math.min(6000, 700 + txt.length*90));
-  }catch(e){ speaking = false; }
+    speechSynthesis.cancel();
+    var zeichen = 0, offen = teile.length, eingereiht = 0;
+    var fertig = function(){ if(lauf === sagLauf && --offen <= 0) speaking = false; };
+    teile.forEach(function(teil){
+      var u = new SpeechSynthesisUtterance(teil.text);
+      u.lang = teil.lang || "de-DE";
+      u.rate = typeof teil.rate === "number" ? teil.rate : 1.05;
+      if(typeof teil.pitch === "number") u.pitch = teil.pitch;
+      // Erst wenn ALLE durch sind, darf das Mikro wieder mitschreiben - sonst
+      // hoert es sich zwischen zwei Utterances selbst zu.
+      u.onend   = fertig;
+      u.onerror = fertig;
+      zeichen += teil.text.length;
+      speechSynthesis.speak(u);
+      eingereiht++;
+    });
+    setTimeout(function(){ if(lauf === sagLauf) speaking = false; },
+               Math.min(12000, 700 + zeichen*90));
+  }catch(e){
+    // Wirft speak() erst beim ZWEITEN Teil, laeuft der erste schon. Den
+    // Echo-Schutz hier abzuraeumen oeffnete genau dann ein Fenster, in dem das
+    // Mikro die eigene Ansage mitschreibt. Also nur abraeumen, wenn wirklich
+    // nichts losgeschickt wurde - sonst uebernimmt der Timeout.
+    if(lauf === sagLauf){
+      if(!eingereiht) speaking = false;
+      else setTimeout(function(){ if(lauf === sagLauf) speaking = false; },
+                      Math.min(12000, 700 + zeichen*90));
+    }
+  }
 }
 
 // -- Wortlisten fuer den Parser (Artikel wie "ein/eine" bewusst RAUS -> keine Geister-1en)
@@ -3256,13 +3800,23 @@ function applySpokenResultInner(p, rawTxt){
   // hier und nicht im Mikro-Zweig, damit sie fuer jeden Weg ins Spiel gilt.
   if(syncAn() && fremdeHoheit()) return;
 
+  // 🔴 Solange nicht ausgelost ist, wird nichts gebucht - und es wird auch nicht
+  // so getan. applyDart gibt hier "noop", der Erfolgs-Schluss sagte trotzdem
+  // ". Rest 501" - das klingt nach gebucht. Und auf dem Rad-Bildschirm gibt es
+  // kein voiceStatus-Feld, die Ansage ist also die EINZIGE Rueckmeldung.
+  // "stopp" bleibt erlaubt, sonst kaeme man aus dem Mikro nicht mehr raus.
+  if(m.anwurfOffen && p.cmd !== "stop"){
+    updateVoiceStatus("Erst wird der Anwurf ausgelost.");
+    say("Erst wird ausgelost."); return;
+  }
+
   // Eine Korrektur laeuft: die naechste Ansage ist der Ersatzwurf.
   if(korrigiere){
     if(p.cmd==="ok"){
       korrigiere = null;
       snapshot(); endTurn(); save(); render();
       updateVoiceStatus("&#8594; nächster Spieler");
-      say("Okay. " + dranText());
+      sagWechsel("Okay.");
       return;
     }
     if(p.cmd==="stop"){ korrigiere=null; stopVoice(); render(); return; }
@@ -3298,7 +3852,7 @@ function applySpokenResultInner(p, rawTxt){
     if(p.cmd==="ok" || p.cmd==="skip"){
       snapshot(); endTurn(); save(); render();
       updateVoiceStatus("&#8594; nächster Spieler");
-      say(dranText());
+      sagWechsel();
       return;
     }
     if(p.cmd==="undo"){
@@ -3337,7 +3891,8 @@ function applySpokenResultInner(p, rawTxt){
         view="game"; save(); render();
         updateVoiceStatus("&#8594; weiter"); say("Weiter"); return;
       }
-      snapshot(); endTurn(); save(); render(); updateVoiceStatus("&#8594; nächster Spieler"); say("Nächster"); return;
+      snapshot(); endTurn(); save(); render();
+      updateVoiceStatus("&#8594; nächster Spieler"); sagWechsel("Nächster."); return;
     }
     if(p.cmd==="stop"){ stopVoice(); render(); return; }
   }
@@ -3526,8 +4081,19 @@ document.getElementById("app").addEventListener("click", function(ev){
                      doubleIn:setupSel.doubleIn, bestOf:setupSel.bestOf});
     render(); return;
   }
-  if(act==="nextleg"){ view="game"; save(); render(); return; }
-  if(act==="nextplatz"){ view="game"; save(); render(); return; }
+  // Anwurf-Rad
+  if(act==="raddreh"){ radLosen(); return; }
+  if(act==="radweiter"){ radUebernehmen(); return; }
+  // Bewusst OHNE Los: der erste in der Liste faengt an, wie vor 1.45.
+  if(act==="radohne"){ if(state.match) state.match.anwurfIdx = 0; radUebernehmen(); return; }
+
+  // Ein neues Leg faengt bei 501 an - und der Weg dorthin gehoert VOR den ersten
+  // Dart, nicht hinter den letzten.
+  if(act==="nextleg" || act==="nextplatz"){
+    view="game"; save(); render();
+    if(state.match && !state.match.finished) say(dranText());
+    return;
+  }
   if(act==="platzende"){
     // Abbrechen: der Rest bleibt ohne Platz, das Ergebnis wird trotzdem gebucht.
     var m0 = state.match;
@@ -3568,6 +4134,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="s_bo"){ state.settings.bestOf=parseInt(t.getAttribute("data-v"),10); save(); render(); return; }
   if(act==="s_di"){ state.settings.doubleIn=!state.settings.doubleIn; save(); render(); return; }
   if(act==="s_platz"){ state.settings.platzSpiel=!(state.settings.platzSpiel!==false); save(); render(); return; }
+  if(act==="s_rad"){ state.settings.anwurfRad=!(state.settings.anwurfRad!==false); save(); render(); return; }
   if(act==="s_name"){ state.settings.nurMitName=!state.settings.nurMitName; save(); render(); return; }
   if(act==="s_tts"){ state.settings.tts=!state.settings.tts; ttsOn=!!state.settings.tts; save(); render(); return; }
   if(act==="s_hist"){ state.settings.keepHistory=!(state.settings.keepHistory!==false); save(); render(); return; }
@@ -3639,6 +4206,7 @@ document.getElementById("app").addEventListener("click", function(ev){
     h2hAuto = false;                      // ab jetzt gilt Lions Wahl
     render(); return;
   }
+  if(act==="statsort"){ statsSort = t.getAttribute("data-k") || "siege"; render(); return; }
   if(act==="h2hopen"){
     h2hSel = orderPair(t.getAttribute("data-a"), t.getAttribute("data-b"));
     h2hAuto=false; view="h2h"; render(); return;
@@ -3718,7 +4286,10 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="wok"){
     if(state.match && !state.match.finished){
       snapshot(); endTurn(); save(); render();
-      if(voiceOn){ updateVoiceStatus("&#8594; nächster Spieler"); say(dranText()); }
+      // endTurn() sagt selbst an. Ein zweites say() hier brach die Ansage ab,
+      // noch bevor das Ergebnis heraus war - speechSynthesis.cancel() leert die
+      // Schlange, es haengt sich nichts hintendran.
+      if(voiceOn) updateVoiceStatus("&#8594; nächster Spieler");
     }
     return;
   }
@@ -3786,6 +4357,17 @@ window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, 
   getRecog:function(){ return recog; }, ensureRecog:ensureRecog,
   applyTurnSum:applyTurnSum, sumMode:sumMode,
   stellEmpfehlung:stellEmpfehlung, restGuete:restGuete,
+  radLosen:radLosen, radUebernehmen:radUebernehmen, zufallsIndex:zufallsIndex,
+  setAnwurfIdx:function(i){ if(state.match) state.match.anwurfIdx=i; },
+  lastTurnText:lastTurnText, dranText:dranText, wechselTexteSetzen:wechselTexteSetzen,
+  wegText:wegText, istMadhouse:istMadhouse,
+  letzteWechselAnsage:function(){ return wechselAnsage; },
+  echoSchutzSteht:function(){ return !!speaking; },
+  radStand:function(){ return {gezeigt:radGezeigt, laeuft:radLaeuft, winkel:radWinkel,
+                               ziel:radZiel}; },
+  radNameWinkel:radNameWinkel,
+  warMadhouse:function(){ return madhouseAnsage; },
+  gesamtBilanz:gesamtBilanz, setStatsSort:function(k){ statsSort=k; }, statMass:statMass,
   reload:function(){ state=load(); view=restoreView(); },
   exportPayload:exportPayload, clearHistory:clearHistory, resetAll:resetAll,
   startTraining:startTraining, trainDart:trainDart, trainUndo:trainUndo,

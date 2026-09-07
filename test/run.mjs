@@ -70,6 +70,12 @@ function boot(seedStorage = {}, opt = {}) {
   vm.createContext(win);
   vm.runInContext(code, win, { filename: "index.html#script" });
 
+  // Das Anwurf-Rad schiebt sich vor das Board und muss erst weggedreht werden.
+  // Fuer die 300 Tests, die Wurf-Logik pruefen, waere das in jedem einzelnen ein
+  // zusaetzlicher Klick - also hier aus, und in den Rad-Tests per opt.rad an.
+  // Das Rad SELBST wird damit nicht ungeprueft: siehe die Tests "Anwurf-Rad".
+  if (!opt.rad) win.DARTS.getSettings().anwurfRad = false;
+
   // --- Der echte Klick-Handler, so wie ihn ein Finger ausloest ------------
   // Ohne den ueberspringt jeder Test die Kette Screen -> UI-State -> Logik,
   // und genau dort sassen zwei Fehler, die 73 gruene Tests nicht sahen.
@@ -2462,7 +2468,7 @@ t("Kein Element sieht klickbar aus, ohne es zu sein", () => {
   const behandelt = new Set((script.match(/act===\"[a-z_0-9]+\"/g) || [])
     .map(x => x.slice(7, -1)));
 
-  const screens = ["home", "roster", "setup", "h2h", "solo", "settings", "player"];
+  const screens = ["home", "roster", "setup", "h2h", "stats", "solo", "settings", "player"];
   const tot = [];
   screens.forEach(v => {
     if (v === "player") D.setPlayerSel("lion");
@@ -2481,6 +2487,20 @@ t("Kein Element sieht klickbar aus, ohne es zu sein", () => {
       if (!/data-act/.test(kopf)) tot.push(v + ": Pfeil ohne Ziel " + sp.slice(0, 60));
     });
   });
+  // Die Rad-Ansicht steht in keiner setView-Liste - sie braucht ein laufendes
+  // Spiel mit offenem Anwurf und zeigt vor und nach dem Los verschiedene Knoepfe.
+  {
+    const r = boot({}, { rad: true });
+    r.D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    [null, 1].forEach(los => {
+      if (los !== null) r.D.setAnwurfIdx(los);
+      r.D.render();
+      (r.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || []).forEach(x => {
+        const a = x.slice(10, -1);
+        if (!behandelt.has(a)) tot.push("rad: data-act=" + a + " kennt der Handler nicht");
+      });
+    });
+  }
   eq(tot, [], "tote Klickziele gefunden");
 });
 
@@ -2494,10 +2514,23 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", async () => {
   const angeboten = new Set();
   const sammle = () => (ctx.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
     .forEach(x => angeboten.add(x.slice(10, -1)));
-  ["home", "roster", "setup", "h2h", "solo", "settings"].forEach(v => {
+  ["home", "roster", "setup", "h2h", "stats", "solo", "settings"].forEach(v => {
     D.setView(v); D.render(); sammle();
   });
   D.setPlayerSel("lion"); D.setView("player"); D.render(); sammle();
+
+  // Das Anwurf-Rad erscheint nur, solange der Anwurf nicht ausgelost ist - und
+  // es zeigt zwei verschiedene Knopf-Saetze, vor und nach dem Drehen.
+  {
+    const r = boot({}, { rad: true });
+    r.D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+    r.D.render();
+    (r.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+      .forEach(x => angeboten.add(x.slice(10, -1)));
+    r.click("raddreh");
+    (r.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+      .forEach(x => angeboten.add(x.slice(10, -1)));
+  }
 
   // Der Warte-Kasten erscheint nur mit Mikro und voller Aufnahme - seine Knoepfe
   // waeren sonst als "nirgends angeboten" gemeldet, obwohl es sie gibt.
@@ -4364,8 +4397,12 @@ t("Nach 'Alles zuruecksetzen' stimmt die Ansage wieder", () => {
   ctx.D.getState().settings.tts = false;
   ctx.D.resetAll();
   eq(ctx.D.getSettings().tts, true, "Werkszustand hat die Ansage an");
-  ctx.gesagt.length = 0;
   ctx.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  // resetAll() stellt den Werkszustand her - und dort ist das Anwurf-Rad AN,
+  // auch wenn boot() es fuer die Testreihe abgeschaltet hatte. Also erst
+  // auslosen, dann werfen; sonst bucht applyDart() zu Recht nichts.
+  ctx.D.radUebernehmen();
+  ctx.gesagt.length = 0;
   seq(ctx.D, ["20", "20", "20"]);
   ok(ctx.gesagt.length > 0, "also wird auch gesprochen");
 });
@@ -5101,6 +5138,456 @@ t("Zwei Korrekturen hintereinander gehen", () => {
      "auch die zweite Korrektur sitzt");
   eq(D.getMatch().players[0].darts, 3, "immer noch drei Darts");
   eq(D.getMatch().players[0].score, 501 - 20 - 40 - 60);
+});
+
+// ================================================================ Anwurf-Rad
+// Der Kern: es darf kein Dart fallen, bevor ausgelost ist - sonst entscheidet
+// der erste Wurf, wer angefangen hat, und das Rad ist Deko.
+
+t("Ein neues Spiel landet auf dem Rad, nicht auf dem Board", () => {
+  const ctx = boot({}, { rad: true });
+  ctx.D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.D.render();
+  eq(ctx.D.getView(), "rad", "der Bildschirm nach dem Start");
+  ok(ctx.has("raddreh"), "das Rad laesst sich drehen");
+  ok(!ctx.has("num", { "data-n": 20 }), "solange nicht ausgelost ist, gibt es kein Zahlenfeld");
+  eq(ctx.D.getMatch().anwurfOffen, true);
+});
+
+t("Der Ausgeloste faengt an - und ist auch der, der dran ist", () => {
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.render();
+  D.setAnwurfIdx(2);                 // Los stellen statt wuerfeln
+  D.render();
+  ctx.click("radweiter");
+  eq(D.getMatch().anwurfOffen, false, "das Rad ist durch");
+  eq(D.getMatch().currentIdx, 2, "Justus ist dran");
+  eq(D.getMatch().startIdx, 2, "und ist der Anwerfer des Legs");
+  eq(D.getView(), "game", "jetzt erst das Board");
+  ok(ctx.has("num", { "data-n": 20 }), "und das Zahlenfeld ist da");
+});
+
+t("Solange nicht ausgelost ist, wird kein Wurf gebucht", () => {
+  // Das Zahlenfeld steht auf dem Rad-Bildschirm nicht da - aber ueber das Mikro
+  // oder ein zweites Handy, das noch auf "game" steht, kaeme sonst ein Wurf
+  // herein, bevor feststeht, wer anfaengt.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  eq(D.applyDart(3, 20), "noop", "einzelner Dart");
+  eq(D.applyTurnSum(60, 3), "noop", "ganze Aufnahme");
+  D.setVoiceOn(true);
+  ctx.gesagt.length = 0;
+  D.applySpokenResult(D.parseSpeech("triple 20", []), "triple 20");
+  eq(D.getMatch().players[0].score, 501, "nichts abgezogen");
+  eq(D.getMatch().players[0].darts, 0, "und kein Dart gezaehlt");
+  // 🔴 Und es wird auch nicht so getan: der Erfolgs-Schluss sagte ". Rest 501" -
+  // das klingt nach gebucht. Auf dem Rad-Bildschirm gibt es kein Statusfeld,
+  // die Ansage ist die einzige Rueckmeldung.
+  const gesagt = ctx.gesagt.join(" | ");
+  ok(/ausgelost/.test(gesagt), "es sagt, woran es liegt: " + gesagt);
+  ok(!/Rest 501/.test(gesagt), "und meldet keinen Rest, als waere gebucht worden");
+});
+
+t("Ein fremdes Los zieht den Zielwinkel mit", () => {
+  // 🔴 radZiel ist Modul-Zustand, anwurfIdx liegt im Match und wird gesynct.
+  // Blieb der Winkel am alten Los haengen, landete der Zeiger sichtbar auf einem
+  // anderen Namen, als die Ueberschrift nannte.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setAnwurfIdx(0); D.render();
+  const passt = () => {
+    const m = D.getMatch(), schritt = 360 / m.players.length;
+    const stand = (((D.radStand().ziel % 360) + 360) % 360);
+    // Unter dem Zeiger (0 Grad) muss der Sektor des Loses stehen.
+    const unterZeiger = Math.floor((((360 - stand) % 360) + 360) % 360 / schritt);
+    return unterZeiger === m.anwurfIdx;
+  };
+  ok(passt(), "erstes Los");
+  D.setAnwurfIdx(2); D.render();                    // anderes Handy setzt sich durch
+  ok(passt(), "der Zielwinkel folgt dem neuen Los");
+});
+
+t("Kein Name steht am Ende auf dem Kopf - der Ausgeloste zuerst", () => {
+  // 🔴 Der Text dreht mit der Scheibe mit. Die naive Regel (nur die Ruhelage
+  // ansehen) stellte den Ausgelosten am Ende verkehrt herum unter den Zeiger.
+  const { D } = boot({}, { rad: true });
+  const aufrecht = (dreh, stand) => {
+    const a = (((dreh + stand) % 360) + 360) % 360;
+    return a <= 90 || a >= 270;
+  };
+  [2, 3, 4, 5, 6].forEach(n => {
+    const schritt = 360 / n;
+    for (let sieger = 0; sieger < n; sieger++) {
+      const stand = 360 * 5 - (sieger + 0.5) * schritt;      // wo die Scheibe haelt
+      for (let i = 0; i < n; i++) {
+        const mitte = (i + 0.5) * schritt;
+        ok(aufrecht(D.radNameWinkel(mitte, stand), stand),
+           n + " Spieler, Sieger " + sieger + ": Name " + i + " steht auf dem Kopf");
+      }
+    }
+  });
+});
+
+t("Das Rad laesst das Mikro an", () => {
+  // Gemessen als Regression: ohne "rad" in der stopVoice-Liste in render() ging
+  // das Mikro nach JEDEM neuen Spiel aus - und hoheitMelden() gab es dabei ans
+  // andere Handy ab. Der Kommentar dort sagt ausdruecklich: es bleibt zwischen
+  // den Runden an.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.setSR(function () { this.start = () => {}; this.stop = () => {}; this.abort = () => {}; });
+  D.setVoiceOn(true);
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.render();
+  eq(D.getView(), "rad");
+  eq(D.istVoiceOn(), true, "auf dem Rad-Bildschirm bleibt das Mikro an");
+});
+
+t("Ein Render aus einer anderen Ansicht dreht die Drehung nicht tot", () => {
+  // radAnimieren() lief frueher bei JEDEM render(). Wer waehrend der 3,4 s das
+  // Zahnrad antippte, kam zurueck auf ein Rad, das sich nie gedreht hatte und
+  // sofort das Ergebnis zeigte.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setAnwurfIdx(2);
+  D.setView("settings"); D.render();                 // Abstecher in die Einstellungen
+  eq(D.radStand().gezeigt, null,
+     "ein Render ausserhalb der Rad-Ansicht darf die Drehung nicht als erledigt abhaken");
+  D.setView("rad"); D.render();
+  eq(D.getMatch().anwurfOffen, true, "das Rad steht noch offen");
+  eq(D.getMatch().anwurfIdx, 2, "und das Los steht noch");
+});
+
+t("Der verworfene Anwurf laesst die Uhr nicht zurueck", () => {
+  // 🔴 Ein Paket zu verwerfen, OHNE seine Uhr zu uebernehmen, laehmt die Leitung:
+  // ab da verwirft die Gegenseite jedes eigene Paket als "aelter". Gemessen im
+  // Fenster davor: drei T20 waren still weg. Also muss die Uhr mit, und der
+  // eigene, weiter fortgeschrittene Stand geht sofort raus.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  const raus = [];
+  D.setSyncTransport(u => { raus.push(u); return Promise.resolve({ ok: true }); },
+                     function () { this.close = () => {}; });
+  D.syncOeffnen("ABCDEF");
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setAnwurfIdx(1); D.radUebernehmen();
+  seq(D, ["T20", "T20", "T20"]);                    // Arne 501 -> 321
+  eq(D.getMatch().players[1].score, 321);
+  const fremd = JSON.parse(JSON.stringify(D.getMatch()));
+  fremd.anwurfOffen = true; fremd.anwurfIdx = 0;
+  fremd.currentIdx = 0; fremd.startIdx = 0;
+  fremd.players[1].score = 501; fremd.players[1].darts = 0;
+  raus.length = 0;
+  eq(D.syncUebernehmen({ v: 1, uhr: 4242, von: "ANDERES", match: fremd }), "anwurf");
+  eq(D.syncStand().uhr >= 4242, true, "die Uhr wurde uebernommen, nicht ignoriert");
+  eq(D.getMatch().players[1].score, 321, "und die 180 Punkte stehen noch");
+  ok(raus.length > 0, "der eigene Stand geht sofort hinterher");
+});
+
+t("Ein zweites Handy macht einen schon uebernommenen Anwurf nicht wieder auf", () => {
+  // Gemessen mit zwei Geraeten, die gleichzeitig drehen: das spaetere Paket
+  // stellte anwurfOffen zurueck auf true - wer schon an der Scheibe stand,
+  // stand ploetzlich nicht mehr dran.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setAnwurfIdx(2); D.radUebernehmen();
+  const m = D.getMatch();
+  eq(m.currentIdx, 2);
+  // Dasselbe Spiel, aber vom anderen Handy noch mit offenem Rad und hoher Uhr.
+  const fremd = JSON.parse(JSON.stringify(m));
+  fremd.anwurfOffen = true; fremd.anwurfIdx = 0; fremd.currentIdx = 0; fremd.startIdx = 0;
+  eq(D.syncUebernehmen({ v: 1, uhr: 9999, von: "ANDERES", match: fremd }), "anwurf");
+  eq(D.getMatch().anwurfOffen, false, "das Rad bleibt zu");
+  eq(D.getMatch().currentIdx, 2, "und Justus bleibt dran");
+});
+
+t("Die eigene Ansage wird nicht mitgeschrieben, auch wenn sie eine ablöst", () => {
+  // 🔴 speechSynthesis.cancel() loest die onend der laufenden Ansage aus - und
+  // die feuern ASYNCHRON, also nach dem Neustart. Ohne Laufnummer raeumten sie
+  // den frisch gesetzten Echo-Schutz sofort wieder ab. Seit 1.45 steht am Ende
+  // jeder Ansage ein Finishweg ("... Doppel 20"), den der Parser als Wurf liest.
+  const ctx = boot();
+  const D = ctx.D;
+  const nachzuegler = [];
+  ctx.win.speechSynthesis = {
+    cancel() { nachzuegler.splice(0).forEach(fn => setTimeout(fn, 0)); },
+    speak(u) { ctx.gesagt.push(u.text); if (u.onend) nachzuegler.push(u.onend); },
+  };
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["20", "20", "20"]);                        // erste Ansage laeuft
+  ok(D.echoSchutzSteht(), "waehrend der ersten Ansage steht der Schutz");
+  seq(D, ["20", "20", "20"]);                        // zweite loest sie ab
+  return new Promise(r => setTimeout(r, 5)).then(() => {
+    ok(D.echoSchutzSteht(),
+       "der Schutz darf nicht fallen, weil die ALTE Ansage abgebrochen wurde");
+  });
+});
+
+t("Das Rad dreht auch fuer den, der sonst nie anfaengt", () => {
+  const { D } = boot({}, { rad: true });
+  // 3000 Ziehungen: bei drei Spielern muss jeder vorkommen, und keiner darf
+  // die Haelfte ueberschreiten. Ohne diese Pruefung koennte zufallsIndex
+  // konstant 0 liefern - also genau das alte Verhalten - und niemand saehe es.
+  const zaehler = [0, 0, 0];
+  for (let i = 0; i < 3000; i++) zaehler[D.zufallsIndex(3)]++;
+  zaehler.forEach((n, i) => {
+    ok(n > 700, "Spieler " + i + " kam nur " + n + " mal dran");
+    ok(n < 1400, "Spieler " + i + " kam " + n + " mal dran - das ist keine Gleichverteilung");
+  });
+});
+
+t("„Ohne Rad starten“ nimmt den ersten - auch wenn schon ausgelost wurde", () => {
+  // 🔴 Der Knopf hiess frueher immer so und uebernahm trotzdem das Los, sobald
+  // eins gefallen war. Was draufsteht, muss drin sein.
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.render();
+  ok(/Ohne Rad starten · Lion fängt an/.test(ctx.app.innerHTML.replace(/&middot;/g, "·")),
+     "der Knopf sagt, wen er nimmt");
+  D.setAnwurfIdx(2);                       // selbst wenn schon ein Los daliegt
+  ctx.click("radohne");
+  eq(D.getMatch().currentIdx, 0, "trotzdem der erste");
+  eq(D.getMatch().startIdx, 0);
+  eq(D.getView(), "game");
+});
+
+t("Waehrend der Drehung heisst der Knopf „Überspringen“, nicht „Ohne Rad“", () => {
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.render();
+  D.setAnwurfIdx(1);
+  // Die Animation laeuft; im Test gibt es kein SVG-Element, also ist sie sofort
+  // "durch" - der Knopf-Satz fuer die Lage "Los gefallen" ist derselbe.
+  D.render();
+  ok(!/Ohne Rad starten/.test(ctx.app.innerHTML),
+     "kein Knopf, dessen Aufschrift dann luegen wuerde");
+  ctx.click("radweiter");
+  eq(D.getMatch().currentIdx, 1, "hier gilt das Los");
+});
+
+t("Allein ueben dreht kein Rad", () => {
+  const { D } = boot({}, { rad: true });
+  D.startMatch(["lion"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  eq(D.getMatch().anwurfOffen, false, "zu einem Spieler gibt es nichts auszulosen");
+  eq(D.getView(), "game");
+});
+
+t("Rad abgeschaltet: das Spiel faengt sofort an", () => {
+  const ctx = boot({}, { rad: true });
+  ctx.D.setView("settings"); ctx.D.render();
+  ctx.click("s_rad");                                  // Schalter aus
+  eq(ctx.D.getSettings().anwurfRad, false);
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  eq(ctx.D.getMatch().anwurfOffen, false);
+  eq(ctx.D.getView(), "game");
+});
+
+t("🔴 Ein laufendes Spiel aus 1.44 bekommt KEIN Rad mitten in der Runde", () => {
+  // Genau Lions Lage beim Deploy: das Handy laedt die neue Fassung neu, waehrend
+  // eine Runde offen ist. Wuerde upgradeShape das Rad aufmachen, waere der
+  // Zwischenstand weg und der Anwurf neu ausgelost.
+  const alt = {
+    v: 2, roster: [{ id: "lion", name: "Lion", winsManual: 0 }],
+    match: {
+      id: "x1", mode: "x01", gameType: 501, doubleOut: true, bestOf: 1, legNo: 1,
+      players: [{ id: "lion", name: "Lion", score: 264, darts: 9 },
+                { id: "arne", name: "Arne", score: 301, darts: 9 }],
+      currentIdx: 1, startIdx: 0, currentTurn: [], turnStartScore: 301,
+      legs: [], platz: [], finished: false, winnerId: null, _undo: []
+    },
+    history: [], practice: [], train: null
+  };
+  const ctx = boot({ darts_v2: JSON.stringify(alt) }, { rad: true });
+  eq(ctx.D.getMatch().anwurfOffen, false, "kein Rad fuer ein Spiel, das schon laeuft");
+  eq(ctx.D.getMatch().currentIdx, 1, "wer dran war, ist noch dran");
+  eq(ctx.D.getMatch().players[0].score, 264, "der Zwischenstand steht");
+  ctx.D.setView("game"); ctx.D.render();
+  ok(ctx.has("num", { "data-n": 20 }), "und es laesst sich sofort weiterwerfen");
+});
+
+t("Reload waehrend das Rad offen ist landet wieder auf dem Rad", () => {
+  const ctx = boot({}, { rad: true });
+  ctx.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  ctx.D.render();
+  const neu = boot(Object.fromEntries(ctx.store), { rad: true });
+  eq(neu.D.getView(), "rad", "das Rad steht noch offen");
+  ok(neu.has("raddreh"), "und laesst sich drehen");
+});
+
+t("Bei Bo3 wandert der Anwurf vom Ausgelosten aus weiter", () => {
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  D.render(); D.setAnwurfIdx(1); D.render();
+  ctx.click("radweiter");
+  eq(D.getMatch().startIdx, 1);
+  D.setScore(1, 40); D.applyDart(2, 20);               // Arne holt Leg 1
+  eq(D.getMatch().startIdx, 2, "Leg 2 wirft der naechste an, nicht wieder Spieler 0");
+});
+
+// ================================================================ Ansage-Reihenfolge
+// Der Finishweg gehoert VOR den eigenen Wurf. Bis 1.44 kam er direkt nach der
+// eigenen Aufnahme - vier Aufnahmen zu frueh.
+
+t("Nach der eigenen Aufnahme kommt KEIN Finishweg mehr", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 170);
+  seq(D, ["20", "20", "20"]);                          // Lion steht auf 110
+  const gesagt = ctx.gesagt.join(" | ");
+  ok(/Lion 60/.test(gesagt), "das Ergebnis kommt: " + gesagt);
+  ok(/Rest 110/.test(gesagt), "der Rest kommt: " + gesagt);
+  const lionTeil = gesagt.slice(0, gesagt.indexOf("Arne ist dran"));
+  ok(!/Finish/.test(lionTeil) && !/Stell/.test(lionTeil),
+     "aber kein Weg fuer den, der gerade fertig ist: " + lionTeil);
+});
+
+t("Wer drankommt, hoert seinen Weg - vor dem ersten Dart", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(1, 138);                                  // Arnes Rest, wenn er drankommt
+  seq(D, ["20", "20", "20"]);
+  const gesagt = ctx.gesagt.join(" | ");
+  ok(/Arne ist dran/.test(gesagt), "der naechste wird genannt: " + gesagt);
+  const arneTeil = gesagt.slice(gesagt.indexOf("Arne ist dran"));
+  ok(/Finish|Stell/.test(arneTeil), "und bekommt seinen Weg: " + arneTeil);
+});
+
+t("Der Weg wird genau EINMAL gesagt, nicht zweimal", () => {
+  // "Passt" sagte bis 1.44 zusaetzlich an - und weil speechSynthesis.cancel()
+  // die Schlange leert, schnitt der zweite Satz den ersten ab.
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setVoiceOn(true);
+  D.applySpokenResult(D.parseSpeech("20 20 20", []), "…");
+  ctx.gesagt.length = 0;
+  D.setView("game"); D.render();
+  ctx.click("wok");
+  const dran = ctx.gesagt.filter(s => /ist dran/.test(s)).length;
+  eq(dran, 1, "genau eine Wechsel-Ansage: " + JSON.stringify(ctx.gesagt));
+});
+
+t("Aufnahme beenden ohne Wurf wiederholt nicht den Vorgaenger", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  seq(D, ["20", "20", "20"]);                          // Lion 60, jetzt Arne
+  ctx.gesagt.length = 0;
+  D.setView("game"); D.render();
+  ctx.click("skip");                                   // Arne reicht ohne Wurf weiter
+  const gesagt = ctx.gesagt.join(" | ");
+  ok(!/Lion 60/.test(gesagt), "Lions alte Aufnahme kommt nicht noch einmal: " + gesagt);
+  ok(/Lion ist dran/.test(gesagt), "gesagt wird nur, wer jetzt dran ist: " + gesagt);
+});
+
+// ================================================================ Madhouse
+t("Bei Doppel-In sagt die App „Noch kein Doppel“ - der Zweig ist erreichbar", () => {
+  // Gegenprobe zu der Vermutung, closeTurn schreibe lastTurn nur bei Punkten:
+  // es schreibt sie, sobald ueberhaupt Darts in der Aufnahme liegen.
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, doubleIn: true, bestOf: 1 });
+  seq(D, ["20", "20", "20"]);                        // kein Doppel - eroeffnet nicht
+  eq(D.getMatch().lastTurn.kind, "nostart");
+  eq(D.lastTurnText(), "Noch kein Doppel.");
+  ok(/Noch kein Doppel/.test(ctx.gesagt.join(" | ")), "und wird auch gesagt");
+});
+
+t("Rest 2 bei Doppel-Out ist ein Madhouse - und wird gerufen", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 22);
+  seq(D, ["20", "MISS", "MISS"]);                      // Lion steht auf 2
+  ok(D.warMadhouse(), "die App hat es erkannt");
+  const gesagt = ctx.gesagt.join(" | ");
+  ok(/Mad house/i.test(gesagt), "und ruft es aus: " + gesagt);
+  ok(/Lion 20/.test(gesagt), "das Ergebnis geht dabei nicht verloren: " + gesagt);
+});
+
+t("Das Madhouse steht auch auf dem Bildschirm", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 2);
+  D.setView("game"); D.render();
+  ok(/MADHOUSE/.test(ctx.app.innerHTML), "das Band fehlt");
+  ok(/Madhouse: nur noch D1/.test(ctx.app.innerHTML), "und die Zeile ueber dem Feld");
+});
+
+t("Ohne Doppel-Out gibt es kein Madhouse", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: false, bestOf: 1 });
+  D.setScore(0, 22);
+  seq(D, ["20", "MISS", "MISS"]);
+  ok(!D.warMadhouse(), "auf 2 kommt man hier mit einer glatten 2 raus");
+  ok(!/Mad house/i.test(ctx.gesagt.join(" | ")), "also wird auch nichts gerufen");
+});
+
+t("Wer auf der 2 haengen bleibt, bekommt den Ruf nicht jedes Mal", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.setScore(0, 22);
+  seq(D, ["20", "MISS", "MISS"]);                      // Madhouse entsteht
+  ctx.gesagt.length = 0;
+  seq(D, ["MISS", "MISS", "MISS"]);                    // Arne durch -> Lion wieder dran
+  ok(!D.warMadhouse(), "beim zweiten Mal ist es kein Ereignis mehr");
+  const gesagt = ctx.gesagt.join(" | ");
+  ok(!/Mad house/i.test(gesagt), "der Ruf kommt nicht wieder: " + gesagt);
+  ok(/Madhouse/.test(gesagt), "dass er auf der 2 steht, hoert Lion trotzdem: " + gesagt);
+});
+
+// ================================================================ Statistik
+t("Die Kreuztabelle zaehlt auch die Runden zu dritt", () => {
+  const { D } = boot();
+  playMatch(D, ["lion", "arne", "justus"], 0);         // Lion gewinnt zu dritt
+  playMatch(D, ["lion", "arne"], 1);                   // Arne gewinnt das Duell
+  const g = D.gesamtBilanz("lion", "arne");
+  eq(g.n, 2, "beide Spiele zaehlen in die Bilanz");
+  eq([g.winsA, g.winsB], [1, 1]);
+  eq(g.duelle, 1, "als reines Duell zaehlt nur eins");
+  eq([g.duellA, g.duellB], [0, 1]);
+});
+
+t("Die Statistik zeigt jeden gegen jeden und fuehrt ins Duell", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  playMatch(D, ["lion", "arne"], 0);
+  D.setView("stats"); D.render();
+  ok(/Jeder gegen jeden/.test(ctx.app.innerHTML), "die Kreuztabelle fehlt");
+  ctx.click("h2hopen", { "data-a": "lion", "data-b": "arne" });
+  eq(D.getView(), "h2h", "die Zelle fuehrt in den Direktvergleich");
+});
+
+t("Sortieren nach Schnitt stellt die Statistik um", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  // Arne gewinnt zwar nicht, wirft aber den besseren Schnitt.
+  D.getRoster().forEach(p => { p.winsManual = 0; });   // die Vorbelegung stoert hier
+  playMatch(D, ["lion", "arne"], 0);
+  const h = D.getHistory()[0];
+  h.players.forEach(p => { p.darts = 30; p.scored = p.id === "arne" ? 600 : 300; });
+  D.setStatsSort("siege"); D.setView("stats"); D.render();
+  const nachSiegen = (ctx.app.innerHTML.match(/data-act="openplayer" data-id="([a-z]+)"/g) || [])
+    .map(x => x.slice(x.lastIndexOf('"', x.length - 2) + 1, -1));
+  ctx.click("statsort", { "data-k": "avg" });
+  const nachSchnitt = (ctx.app.innerHTML.match(/data-act="openplayer" data-id="([a-z]+)"/g) || [])
+    .map(x => x.slice(x.lastIndexOf('"', x.length - 2) + 1, -1));
+  eq(nachSiegen[0], "lion", "nach Siegen steht Lion oben");
+  eq(nachSchnitt[0], "arne", "nach Schnitt steht Arne oben");
 });
 
 // ---------------------------------------------------------------- Ausgabe

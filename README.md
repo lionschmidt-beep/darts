@@ -10,6 +10,12 @@ Handy-Web-App zum Darts-Spielen für Lions Team. Eine Datei, kein Login, kein Se
 Doppel-Out oder beliebiger Ausgang, optional Doppel-In. Legs als einzelnes Leg oder
 Best of 3/5/7 mit wechselndem Anwurf.
 
+**Der Anwurf wird ausgelost** — vor dem ersten Dart dreht ein Rad mit einem Feld je
+Spieler; wer unter dem Zeiger landet, fängt an, und von ihm aus wandert der Anwurf bei
+Best-of weiter. Ohne das Rad fing immer der erste in der Liste an, also praktisch immer
+derselbe. Das Los fällt in JS, nicht in der Animation — eine abgebrochene CSS-Transition
+darf nicht darüber entscheiden, wer anfängt. Abschaltbar unter Einstellungen.
+
 **Zu dritt wird um Platz 2 weitergespielt** — wer ausgemacht hat, ist durch und wirft nicht
 mehr mit, die anderen spielen den Rest aus. Sonst sitzt der Abgehängte nur da. Die
 Platzierung landet im Verlauf, gezählt als Sieg wird nur Platz 1.
@@ -23,6 +29,17 @@ passiert ist — inklusive „💥 überworfen, zurück auf 40", damit ein Bust 
 **Finish-Vorschlag ab Rest ≤ 170** — und zwar der, den man auch wirft: der Rechner
 bevorzugt D16 vor D20 (32→16→8→4→2 hält fünf Halbierungsstufen, 40→20→10→5 nur drei), und schlägt
 nie einen Doppelring als Stellwurf vor. Bei 60 steht dort `20 D20`, nicht `T18 D3`.
+
+**Madhouse** — Rest 2 bei Doppel-Out: es geht nur noch die D1, das kleinste Feld der
+Scheibe. Die App ruft es aus (eigene Ansage, tiefer und langsamer) und zeigt ein Band über
+dem Zahlenfeld. Der Ruf kommt nur, wenn die Lage neu entsteht — wer auf der 2 hängen
+bleibt, hört sie nicht bei jeder Aufnahme wieder.
+
+**Statistik** — drei Blickwinkel auf dieselben Leute: die Team-Rangliste (wer hat wie oft
+gewonnen), eine Kreuztabelle „jeder gegen jeden" aus **allen gemeinsamen Spielen** (auch
+denen zu dritt — eine reine Duell-Tabelle wäre bei drei Leuten, die meist zu dritt spielen,
+leer), und alle Zahlen nebeneinander, sortierbar nach Siegen, Quote, Schnitt, bester
+Aufnahme, höchstem Finish, 180ern oder Spielen.
 
 **Duelle** — Jedes beendete Spiel wird gespeichert; daraus entsteht der Direktvergleich:
 „Lion gegen Arne 8:3", Siegesserie, Legs, 3-Dart-Schnitt, beste Aufnahme, höchstes Finish,
@@ -42,6 +59,14 @@ steht dann in jedem Duell links.
 Doppel 5"), die App trägt ein und sagt zurück, was sie verstanden hat. Doppel/Triple
 **vor** die Zahl. Befehle: „zurück", „weiter", „stopp". Zuverlässig auf Android-Chrome,
 iOS/Safari best-effort. Der Lautsprecher sagt auch beim Tippen jede Aufnahme an.
+
+🔴 **Der Finishweg kommt VOR dem Wurf, nicht danach.** Bis 1.44 hing er an der eigenen
+Aufnahme – also mehrere Aufnahmen zu früh: wer gerade geworfen hat, braucht ihn nicht,
+und bis er wieder an der Scheibe steht, hat er ihn vergessen. Jetzt gilt: nach der Aufnahme
+nur „Arne 105, Rest 396", und wenn der Nächste drankommt „Lion ist dran, 138, Finish:
+Triple 20, Triple 18, Doppel 12". Beides in **einer** Ansage –
+`speechSynthesis.cancel()` leert die ganze Schlange, zwei `say()` hintereinander schneiden
+einander ab.
 
 **Einstellungen** — Standardmodus, Ausgang, Legs, Doppel-In, Ansage, Verlauf, Sicherung.
 
@@ -71,7 +96,7 @@ Single-File-App: `index.html`. Kein Build, kein npm. Dazu `manifest.webmanifest`
 eine alte Fassung auf dem Handy festzunageln).
 
 ```
-node test/run.mjs      # 209 Logik-Tests, ohne Abhängigkeiten
+node test/run.mjs      # 371 Logik-Tests, ohne Abhängigkeiten
 ```
 
 Der Testrunner zieht den `<script>`-Block aus `index.html` und führt ihn gegen einen
@@ -80,6 +105,10 @@ Klick-Handler** (`click`/`has`/`classOf`), denn genau in der Kette Bildschirm �
 Regel saßen die schwersten Fehler. `reboot()` simuliert das Wegwischen der App auf dem
 Handy. Zwei Tests suchen alle Screens nach toten Klickzielen ab und erzwingen, dass jeder
 Handler-Zweig mindestens einmal angesteuert wird.
+
+🔴 `boot()` schaltet das **Anwurf-Rad ab**, weil es sich sonst vor jeden der ~300
+Wurf-Logik-Tests schiebt. Das Rad selbst wird mit `boot({}, {rad:true})` geprüft — wer es
+ändert, muss dort hinsehen, nicht in der Wurf-Logik.
 
 Version steht in `VERSION` und im Kopf der App (Einstellungen). Push auf `main`
 veröffentlicht über GitHub Pages sofort.
