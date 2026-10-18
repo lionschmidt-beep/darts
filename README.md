@@ -46,6 +46,12 @@ Aufnahme, höchstem Finish, 180ern oder Spielen.
 180er und die letzten zwölf Begegnungen. Im laufenden Spiel steht der Duellstand im Kopf.
 Gezählt werden nur echte Duelle zu zweit — Runden mit mehr Leuten stehen separat darunter.
 
+**Bull-Nähe** — wer am nächsten am Bull steckt, gewinnt. Gespielt wird an der Scheibe,
+die App hält nur den Sieger fest: Mitspieler antippen, dann „X hat gewonnen". Eigene
+Bull-Bilanz (Siege, Runden, Quote) und die letzten Runden, letzter Eintrag löschbar.
+Zählt bewusst nicht in Team-Rangliste und Duelle. Liegt im Stand (Feld `bull`) und
+damit auch in der Sicherung, wird aber nicht aufs zweite Handy gesynct.
+
 **Allein üben** — X01 gegen den eigenen Rekord (wenigste Darts), Doppel-Training
 (D1 bis Bull, drei Darts pro Ziel) und Around the Clock. Übungsläufe zählen nicht in die
 Rangliste und nicht in die Duell-Bilanz.

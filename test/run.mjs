@@ -2518,6 +2518,9 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", async () => {
     D.setView(v); D.render(); sammle();
   });
   D.setPlayerSel("lion"); D.setView("player"); D.render(); sammle();
+  // Bull-Naehe: "Letzten Eintrag loeschen" gibt es erst ab einer Runde.
+  D.bullSieg(["lion", "arne"], "lion");
+  D.setView("bull"); D.render(); sammle();
 
   // Das Anwurf-Rad erscheint nur, solange der Anwurf nicht ausgelost ist - und
   // es zeigt zwei verschiedene Knopf-Saetze, vor und nach dem Drehen.
@@ -5588,6 +5591,72 @@ t("Sortieren nach Schnitt stellt die Statistik um", () => {
     .map(x => x.slice(x.lastIndexOf('"', x.length - 2) + 1, -1));
   eq(nachSiegen[0], "lion", "nach Siegen steht Lion oben");
   eq(nachSchnitt[0], "arne", "nach Schnitt steht Arne oben");
+});
+
+// ---------------------------------------------------------------- Bull-Naehe
+t("Bull-Naehe: Sieger antippen speichert ihn und uebersteht den Neustart", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setView("bull"); D.render();
+  ok(ctx.has("bullwin", { "data-id": "arne" }), "Sieger-Knopf fuer Arne fehlt");
+  ctx.click("bullwin", { "data-id": "arne" });
+  ctx.click("bullwin", { "data-id": "arne" });
+  ctx.click("bullwin", { "data-id": "lion" });
+  eq(D.getState().bull.length, 3, "drei Runden gespeichert");
+  eq(D.getState().bull[0].players.map(p => p.id), ["arne", "justus", "lion"], "alle drei waren dabei");
+  const neu = reboot(ctx);
+  const b = neu.D.bullBilanz();
+  eq(b[0].id, "arne", "Arne fuehrt");
+  eq([b[0].siege, b[0].runden], [2, 3], "Arne 2 Siege aus 3");
+  eq(b.find(e => e.id === "justus").siege, 0, "Justus ohne Sieg, aber gelistet");
+});
+
+t("Bull-Naehe zaehlt nicht in die Team-Rangliste und nicht in den Verlauf", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setView("bull"); D.render();
+  ctx.click("bullwin", { "data-id": "lion" });
+  eq(D.getHistory().length, 0, "X01-Verlauf bleibt leer");
+  D.setView("home"); D.render();
+  ok(/1 Runde/.test(ctx.app.innerHTML), "Startseite zeigt die Bull-Runde");
+});
+
+t("Bull-Naehe: abgewaehlter Spieler ist nicht dabei, unter zwei gibt es keinen Knopf", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setView("bull"); D.render();
+  ctx.click("bullpick", { "data-id": "justus" });
+  ok(!ctx.has("bullwin", { "data-id": "justus" }), "Justus ist abgewaehlt");
+  ctx.click("bullwin", { "data-id": "lion" });
+  eq(D.getState().bull[0].players.map(p => p.id), ["arne", "lion"], "nur Arne und Lion");
+  ctx.click("bullpick", { "data-id": "arne" });
+  ok(!ctx.has("bullwin"), "allein gibt es keinen Sieger");
+  eq(D.bullSieg(["lion"], "lion"), null, "Logik lehnt einen Einzelnen ab");
+});
+
+t("Bull-Naehe: letzten Eintrag loeschen, Sicherung bringt die Runden mit", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.bullSieg(["arne", "lion"], "arne");
+  D.bullSieg(["arne", "lion"], "lion");
+  D.setView("bull"); D.render();
+  ctx.answers.confirm = true;
+  ctx.click("bullundo");
+  eq(D.getState().bull.length, 1, "einer geloescht");
+  eq(D.getState().bull[0].winnerId, "arne", "der juengste ist weg");
+  const alt = JSON.stringify({ app: "darts", v: 2, state: D.getState() });
+  const ctx2 = boot();
+  ctx2.D.importText ? ctx2.D.importText(alt) : null;
+  if (ctx2.D.importText) eq(ctx2.D.getState().bull.length, 1, "Import bringt die Bull-Runde mit");
+});
+
+t("Bull-Naehe: alter Stand ohne Bull-Feld laedt sauber", () => {
+  const s = boot().D.defaultState();
+  delete s.bull;
+  const ctx = boot({ darts_v2: JSON.stringify(s) });
+  eq(ctx.D.getState().bull, [], "leeres Feld nachgezogen");
+  ctx.D.setView("bull"); ctx.D.render();
+  ok(/Noch keine Runde/.test(ctx.app.innerHTML), "Ansicht laeuft ohne Daten");
 });
 
 // ---------------------------------------------------------------- Ausgabe

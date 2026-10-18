@@ -101,6 +101,8 @@
   .btn.sm{min-height:44px; font-size:14px; padding:0 12px; border-radius:11px; width:auto;}
   .row{display:flex; gap:10px;}
   .stack{display:flex; flex-direction:column; gap:10px;}
+  .bullzeile{font-size:13.5px; padding:6px 2px; border-bottom:1px solid var(--line);}
+  .bullzeile > span:first-child{color:var(--muted); font-variant-numeric:tabular-nums; margin-right:4px;}
   .muted{color:var(--muted);}
   .center{text-align:center;}
   .card{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px;}
@@ -381,7 +383,7 @@
 // ---------------------------------------------------------------------------
 var KEY    = "darts_v2";
 var KEY_V1 = "darts_v1";
-var VER    = "1.45";
+var VER    = "1.46";
 
 function sumMode(){ return state.settings.inputMode === "sum"; }
 function defaultSettings(){
@@ -400,6 +402,7 @@ function defaultState(){
     match:null,
     history:[],
     practice:[],
+    bull:[],          // Bull-Naehe: je Runde nur, wer dabei war und wer gewonnen hat
     train:null,
     settings:defaultSettings()
   };
@@ -435,6 +438,8 @@ function upgradeShape(s){
   s.history = s.history.filter(function(m){ return m && Array.isArray(m.players) && m.players.length; });
   if(!Array.isArray(s.practice)) s.practice=[];
   s.practice = s.practice.filter(function(r){ return r && r.playerId && r.mode; });
+  if(!Array.isArray(s.bull)) s.bull=[];
+  s.bull = s.bull.filter(function(r){ return r && r.winnerId && Array.isArray(r.players) && r.players.length; });
   // Fremde IDs koennten Anfuehrungszeichen enthalten und aus einem data-Attribut
   // ausbrechen. Durch slug() ist das ausgeschlossen.
   var vergeben = {};
@@ -449,6 +454,10 @@ function upgradeShape(s){
         if(m2.winnerId===alt) m2.winnerId=clean;
       });
       (s.practice||[]).forEach(function(r){ if(r.playerId===alt) r.playerId=clean; });
+      (s.bull||[]).forEach(function(r){
+        r.players.forEach(function(q){ if(q.id===alt) q.id=clean; });
+        if(r.winnerId===alt) r.winnerId=clean;
+      });
       if(s.settings && s.settings.meId===alt) s.settings.meId=clean;
     }
   });
@@ -1781,6 +1790,9 @@ function renderHome(){
     + duelCard()
     + '<div class="stack">'
     + '<button class="btn primary" data-act="nav" data-view="setup">&#127919;&nbsp; Neues Spiel</button>'
+    + '<button class="btn" data-act="nav" data-view="bull">&#128308;&nbsp; Bull-Nähe'
+      + (state.bull.length ? ' <small class="muted">&middot; '+state.bull.length+(state.bull.length===1?' Runde':' Runden')+'</small>' : '')
+      + '</button>'
     + '<div class="row">'
     +   '<button class="btn" data-act="nav" data-view="h2h" style="flex:1">&#9876;&#65039;&nbsp; Duelle</button>'
     +   '<button class="btn" data-act="nav" data-view="stats" style="flex:1">&#128202;&nbsp; Statistik</button>'
@@ -3147,6 +3159,84 @@ function renderSolo(){
       + 'und nicht in die Duell-Bilanz &ndash; nur der eigene Rekord.</div>';
 }
 
+// ---------------------------------------------------------------------------
+// Bull-Naehe: wer am naechsten am Bull steckt. Gespielt wird an der Scheibe,
+// die App haelt nur den Sieger fest - Punkte gibt es hier keine.
+// Eigene Bilanz, bewusst NICHT in Rangliste und Duellen: ein Glueckswurf
+// auf den Bull ist kein X01-Sieg.
+// ---------------------------------------------------------------------------
+var bullSel = null;    // wer spielt mit (Set von IDs), bleibt bis zum Reload
+function bullSieg(playerIds, winnerId){
+  if(!playerIds || playerIds.length<2 || playerIds.indexOf(winnerId)<0) return null;
+  var rec = {id:mid(), ts:Date.now(), winnerId:winnerId,
+             players:playerIds.map(function(id){ return {id:id, name:nameOf(id)}; })};
+  state.bull.unshift(rec);
+  if(state.bull.length>1000) state.bull.length = 1000;
+  save();
+  return rec;
+}
+function bullZurueck(){
+  var r = state.bull.shift(); save(); return r || null;
+}
+// Je Spieler: Siege und Runden. Nur wer mindestens einmal dabei war.
+function bullBilanz(){
+  var map = {};
+  state.bull.forEach(function(r){
+    r.players.forEach(function(q){
+      var e = map[q.id] || (map[q.id] = {id:q.id, name:q.name, siege:0, runden:0});
+      e.runden++;
+      if(r.winnerId===q.id) e.siege++;
+    });
+  });
+  return Object.keys(map).map(function(k){
+    var e = map[k]; if(rosterOf(e.id)) e.name = rosterOf(e.id).name; return e;
+  }).sort(function(a,b){ return (b.siege-a.siege) || (a.runden-b.runden) || a.name.localeCompare(b.name); });
+}
+function renderBull(){
+  if(!bullSel) bullSel = new Set(state.roster.filter(function(p){ return !p.guest; }).map(function(p){ return p.id; }));
+  bullSel.forEach(function(id){ if(!rosterOf(id)) bullSel.delete(id); });
+  var chips = state.roster.map(function(p){
+    return '<button class="chip'+(bullSel.has(p.id)?" on a":"")+'" data-act="bullpick" data-id="'+p.id+'">'
+      + esc(p.name)+'</button>';
+  }).join("");
+  var dabei = state.roster.filter(function(p){ return bullSel.has(p.id); });
+  var knoepfe = dabei.length>=2
+    ? dabei.map(function(p){
+        return '<button class="btn primary" data-act="bullwin" data-id="'+p.id+'">&#127942;&nbsp; '
+          + esc(p.name)+' hat gewonnen</button>';
+      }).join("")
+    : '<div class="hint">Mindestens zwei Spieler wählen.</div>';
+  var bil = bullBilanz();
+  var rows = bil.length ? bil.map(function(e, i){
+    return '<div class="rank"><div class="pos'+(i===0&&e.siege>0?" gold":"")+'">'+(i+1)+'</div>'
+      + '<div class="nm">'+esc(e.name)+'<div class="sublbl">'+e.runden+(e.runden===1?' Runde':' Runden')
+      + ' &middot; '+Math.round(e.siege/e.runden*100)+' %</div></div>'
+      + '<div class="wins">'+e.siege+'<small>Siege</small></div></div>';
+  }).join("") : '<div class="hint" style="margin:6px 0">Noch keine Runde eingetragen.</div>';
+  var letzte = state.bull.slice(0,8).map(function(r){
+    var w = r.players.find(function(q){ return q.id===r.winnerId; });
+    return '<div class="bullzeile"><span>'+fmtDate(r.ts)+'</span> <b>'+esc(w?nameOf(w.id)||w.name:"?")+'</b>'
+      + ' <span class="muted">vor '+r.players.filter(function(q){ return q.id!==r.winnerId; })
+          .map(function(q){ return esc(rosterOf(q.id)?nameOf(q.id):q.name); }).join(", ")+'</span></div>';
+  }).join("");
+  return h()
+    + '<button class="btn ghost sm" data-act="nav" data-view="home" style="width:auto;margin-bottom:12px">&#8592; Zurück</button>'
+    + '<div class="card" style="margin-bottom:14px"><div class="tt" style="font-weight:800;font-size:17px">&#127919; Bull-Nähe</div>'
+    +   '<div class="ts" style="color:var(--muted);font-size:13px;margin-top:4px">Wer am nächsten am Bull steckt, gewinnt. '
+    +   'Gespielt wird an der Scheibe &ndash; hier nur den Sieger antippen.</div></div>'
+    + '<label class="lbl">Wer spielt mit?</label>'
+    + '<div class="chips">'+chips+'</div>'
+    + '<div class="stack">'+knoepfe+'</div>'
+    + (bullMsg ? '<div class="lastturn win" style="margin-top:10px">'+bullMsg+'</div>' : '')
+    + '<div class="card" style="margin-top:14px"><div style="font-size:13px;color:var(--muted);font-weight:700;margin-bottom:4px">BULL-BILANZ</div>'
+    +   rows + '</div>'
+    + (letzte ? '<label class="lbl" style="margin-top:14px">Zuletzt</label>'+letzte
+        + '<button class="btn ghost sm danger" data-act="bullundo" style="width:auto;margin:10px auto 0">Letzten Eintrag löschen</button>' : '')
+    + '<div class="hint" style="text-align:left">Bull-Runden zählen nicht in die Team-Rangliste '
+      + 'und nicht in die Duell-Bilanz &ndash; sie haben ihre eigene Liste.</div>';
+}
+var bullMsg = "";
+
 function renderTrain(){
   var tr = state.train, cfg = TRAIN[tr.mode];
   var who = esc(nameOf(tr.playerId));
@@ -3342,6 +3432,7 @@ function render(){
   else if(view==="stats") html = renderStats();
   else if(view==="settings") html = renderSettings();
   else if(view==="solo") html = renderSolo();
+  else if(view==="bull") html = renderBull();
   else if(view==="player") html = renderPlayer();
   else if(view==="train" && trainBekannt()) html = renderTrain();
   else if(view==="setup") html = renderSetup();
@@ -3984,8 +4075,30 @@ document.getElementById("app").addEventListener("click", function(ev){
     }
     return;
   }
+  if(act==="bullpick"){
+    var bid=t.getAttribute("data-id");
+    if(bullSel.has(bid)) bullSel.delete(bid); else bullSel.add(bid);
+    bullMsg=""; render(); return;
+  }
+  if(act==="bullwin"){
+    var bw=t.getAttribute("data-id");
+    var dabeiIds=state.roster.filter(function(p){ return bullSel.has(p.id); }).map(function(p){ return p.id; });
+    if(bullSieg(dabeiIds, bw)){
+      bullMsg='&#127942; <b>'+esc(nameOf(bw))+'</b> eingetragen';
+      say(nameOf(bw)+" gewinnt die Bull-Runde");
+    }
+    render(); return;
+  }
+  if(act==="bullundo"){
+    var lz=state.bull[0];
+    if(lz && confirm("Letzten Eintrag löschen ("+nameOf(lz.winnerId)+" gewinnt, "+fmtDate(lz.ts)+")?")){
+      bullZurueck(); bullMsg="";
+    }
+    render(); return;
+  }
   if(act==="nav"){
     view=t.getAttribute("data-view");
+    bullMsg="";
     if(view==="setup") setupSel=null;
     settingsMsg="";                    // auch beim Betreten leeren, sonst taucht
                                        // eine alte Meldung spaeter als Geist auf
@@ -4327,7 +4440,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 });
 
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
-window.DARTS = { checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
+window.DARTS = { bullSieg:bullSieg, bullZurueck:bullZurueck, bullBilanz:bullBilanz, checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
   hoertZu:hoertZu, syncHoertWer:function(){ return syncHoert; },
   syncGeraeteZahl:syncGeraeteZahl,
