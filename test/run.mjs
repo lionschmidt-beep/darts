@@ -6,6 +6,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
@@ -29,7 +30,8 @@ function boot(seedStorage = {}, opt = {}) {
   const zustand = { schreibenGeht: !opt.schreibenScheitert };
   const events = {};
   const app = makeEl();
-  const els = { app, newName: makeEl(), voiceStatus: makeEl(), impFile: makeEl() };
+  const els = { app, newName: makeEl(), voiceStatus: makeEl(), impFile: makeEl(),
+                cloudCodeEin: makeEl() };
   const answers = { confirm: true, prompt: null };
   const win = {
     localStorage: {
@@ -58,7 +60,9 @@ function boot(seedStorage = {}, opt = {}) {
     // nicht pruefen, ob der Lautsprecher-Schalter ueberhaupt etwas bewirkt.
     speechSynthesis: { cancel() {}, speak(u) { gesagt.push(u.text); } },
     SpeechSynthesisUtterance: function (t) { this.text = t; },
-    navigator: { userAgent: "test" },              // ohne serviceWorker: SW-Zweig bleibt aus
+    navigator: Object.assign({ userAgent: "test" }, opt.navigator || {}),  // ohne serviceWorker: SW-Zweig bleibt aus
+    // Der Code fuer den gemeinsamen Spielstand braucht echten Zufall - wie im Browser.
+    crypto: opt.ohneCrypto ? undefined : globalThis.crypto,
     location: { protocol: "http:", href: "http://localhost/" },
     confirm: () => answers.confirm,
     prompt: () => answers.prompt,
@@ -66,9 +70,13 @@ function boot(seedStorage = {}, opt = {}) {
     setTimeout, clearTimeout,
     console,
   };
+  // Ein Netz fuer den Abgleich beim Start: ohne es gaebe es im Test kein fetch,
+  // und der erste Abgleich (der beim Laden laeuft) waere ungeprueft.
+  if (opt.fetch) win.fetch = opt.fetch;
   win.window = win;
   vm.createContext(win);
-  vm.runInContext(code, win, { filename: "index.html#script" });
+  // opt.code: eine andere Fassung der App (z. B. 1.46 aus der git-Historie)
+  vm.runInContext(opt.code || code, win, { filename: "index.html#script" });
 
   // Das Anwurf-Rad schiebt sich vor das Board und muss erst weggedreht werden.
   // Fuer die 300 Tests, die Wurf-Logik pruefen, waere das in jedem einzelnen ein
@@ -2555,6 +2563,16 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", async () => {
     await null; await null;                 // der Abruf kommt als Microtask
     v.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
     v.D.setView("game"); v.D.render();
+    (v.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
+      .forEach(x => angeboten.add(x.slice(10, -1)));
+  }
+
+  // Der gemeinsame Spielstand zeigt Code, Abgleichen und Trennen erst, wenn
+  // dieses Geraet verbunden IST - und Teilen nur, wo der Browser teilen kann.
+  {
+    const v = boot({ darts_cloud: JSON.stringify({ code: "ABCDEFGHJKLM", rev: 1 }) },
+                   { navigator: { share: () => Promise.resolve() } });
+    v.D.setView("settings"); v.D.render();
     (v.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
       .forEach(x => angeboten.add(x.slice(10, -1)));
   }
@@ -5657,6 +5675,777 @@ t("Bull-Naehe: alter Stand ohne Bull-Feld laedt sauber", () => {
   eq(ctx.D.getState().bull, [], "leeres Feld nachgezogen");
   ctx.D.setView("bull"); ctx.D.render();
   ok(/Noch keine Runde/.test(ctx.app.innerHTML), "Ansicht laeuft ohne Daten");
+});
+
+// ================================================================ Gemeinsamer Spielstand
+// Eine Cloud im Testlauf mit DERSELBEN rev-Semantik wie darts_pull/darts_push in
+// supabase/migrations/*_darts_stand.sql. Lehre 6: "ein Geraet gegen die Cloud"
+// findet nichts - geprueft wird mit zwei und drei Geraeten ueber mehrere Takte.
+const CODE_RE = /^[A-HJ-NP-Z2-9]{12}$/;
+function fakeCloud() {
+  const rows = new Map();
+  const c = { rows, offline: false, pulls: 0, pushes: 0, bremse: null };
+  function pull(a) {
+    if (!CODE_RE.test(a.p_code || "")) return { fehler: "code" };
+    const r = rows.get(a.p_code);
+    if (!r) return null;
+    if (a.p_rev != null && a.p_rev === r.rev) return { rev: r.rev, gleich: true };
+    return { rev: r.rev, data: JSON.parse(r.data) };
+  }
+  function push(a) {
+    if (!CODE_RE.test(a.p_code || "")) return { fehler: "code" };
+    const d = a.p_data;
+    if (!d || typeof d !== "object" || !Array.isArray(d.history) || !Array.isArray(d.roster))
+      return { fehler: "format" };
+    const roh = JSON.stringify(d);
+    if (roh.length > 2000000) return { fehler: "zu_gross" };
+    const r = rows.get(a.p_code);
+    if (!r) {
+      if ((a.p_rev || 0) !== 0) return { fehler: "unbekannt" };
+      rows.set(a.p_code, { data: roh, rev: 1 });
+      return { ok: true, rev: 1 };
+    }
+    if (a.p_rev == null || a.p_rev !== r.rev)
+      return { konflikt: true, rev: r.rev, data: JSON.parse(r.data) };
+    const alt = JSON.parse(r.data);
+    const graeber = Object.keys(d.grab && typeof d.grab === "object" ? d.grab : {})
+      .filter(k => k.startsWith("h:")).length;
+    if (d.history.length + graeber < alt.history.length) return { fehler: "verlust" };
+    r.data = roh; r.rev++;
+    return { ok: true, rev: r.rev };
+  }
+  c.fetch = (url, opt) => {
+    if (!String(url).includes("/rest/v1/rpc/"))
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.reject(new Error("404")) });
+    if (c.offline) return Promise.reject(new TypeError("Failed to fetch"));
+    const fn = String(url).split("/rpc/")[1];
+    const a = JSON.parse(opt.body);
+    let res;
+    if (fn === "darts_pull") { c.pulls++; res = pull(a); }
+    else if (fn === "darts_push") { c.pushes++; res = push(a); }
+    else return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    const body = JSON.stringify(res === undefined ? null : res);
+    const antwort = { ok: true, status: 200, json: () => Promise.resolve(JSON.parse(body)) };
+    return c.bremse ? c.bremse().then(() => antwort) : Promise.resolve(antwort);
+  };
+  return c;
+}
+// Ein Geraet am Netz der Fake-Cloud. Die Entprell-Uhr ist abgeklemmt: der Takt
+// wird im Test von Hand geschlagen, sonst laege die Reihenfolge beim Zufall.
+function geraet(cloud, seed, opt) {
+  const g = boot(seed || {}, Object.assign({ fetch: cloud.fetch }, opt || {}));
+  g.D.setCloudTransport(cloud.fetch);
+  g.D.setCloudPlaner(() => 0);
+  return g;
+}
+const sig = g => g.D.cloudSig(g.D.gemeinsam());
+async function takte(geraete, n) {
+  for (let i = 0; i < (n || 3); i++)
+    for (const g of geraete) await g.D.cloudAbgleich();
+}
+const schlaf = ms => new Promise(r => setTimeout(r, ms));
+// Ein beendetes Spiel, ohne den ganzen Wurf-Weg - fuer Tests, die viele brauchen.
+function eintrag(id, ended, winnerId, ids) {
+  ids = ids || ["lion", "arne"];
+  return { id, ts: ended - 1000, ended, mode: "x01", gameType: 501, doubleOut: true, doubleIn: false,
+    bestOf: 1, winnerId, legs: [{ no: 1, winnerId, darts: 12 }], platz: [],
+    players: ids.map(p => ({ id: p, name: p.charAt(0).toUpperCase() + p.slice(1), legsWon: p === winnerId ? 1 : 0,
+      darts: 12, scored: 501, best: 100, tons: 1, oneEighties: 0, checkout: 40, avg: 125 })) };
+}
+
+t("Cloud: Neu anlegen gibt einen 12-Zeichen-Code aus dem Raum-Alphabet", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  eq(await A.D.cloudNeu(), "neu");
+  const st = A.D.cloudStand();
+  ok(CODE_RE.test(st.code), "Code passt: " + st.code);
+  eq(st.rev, 1, "erste Fassung");
+  eq(JSON.parse(cl.rows.get(st.code).data).history.length, 1, "das Spiel liegt in der Cloud");
+  eq(A.D.cloudCodeZeigen(st.code).length, 14, "angezeigt als XXXX-XXXX-XXXX");
+  eq(A.D.cloudCodeLesen(A.D.cloudCodeZeigen(st.code).toLowerCase()), st.code, "klein und mit Strichen geht auch");
+  eq(A.D.cloudCodeLesen("ABCD-EFGH-IJKL"), null, "I gibt es im Alphabet nicht");
+  // 2000 Codes: alle 32 Zeichen kommen vor, keins ausserhalb - und keine Dublette.
+  const viele = new Set(); const zeichen = new Set();
+  for (let i = 0; i < 2000; i++) { const c = A.D.cloudCodeNeu(); viele.add(c); [...c].forEach(z => zeichen.add(z)); }
+  eq(viele.size, 2000, "keine Dublette");
+  eq([...zeichen].sort().join(""), "23456789ABCDEFGHJKLMNPQRSTUVWXYZ", "genau das Alphabet");
+});
+
+t("Cloud: ohne echten Zufall gibt es keinen Code statt eines erratbaren", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl, {}, { ohneCrypto: true });
+  eq(A.D.cloudCodeNeu(), null);
+  eq(await A.D.cloudNeu(), "fehler");
+  eq(A.D.cloudStand().code, null, "nicht verbunden");
+  eq(cl.pushes, 0, "nichts hochgeladen");
+});
+
+t("Cloud: zweites Geraet verbindet sich und VEREINIGT - nichts wird ersetzt", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(A.D, ["lion", "justus"], 1);
+  playMatch(B.D, ["arne", "justus"], 0);         // B hat ein eigenes Spiel
+  B.D.bullSieg(["arne", "lion"], "arne");
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  eq(await B.D.cloudVerbinden(A.D.cloudCodeZeigen(code)), "hoch", "B laedt die Vereinigung hoch");
+  ok(B.store.has("darts_v2_vor_verbund"), "vorher Schnappschuss des alten Stands");
+  eq(JSON.parse(B.store.get("darts_v2_vor_verbund")).history.length, 1, "Schnappschuss = B vor dem Verbinden");
+  await takte([A, B], 2);
+  eq(A.D.getHistory().length, 3, "A hat alle drei Spiele");
+  eq(B.D.getHistory().length, 3, "B hat alle drei Spiele");
+  eq(A.D.getState().bull.length, 1, "Bull-Runde von B ist bei A");
+  eq(sig(A), sig(B), "gemeinsamer Teil identisch");
+  ["lion", "arne", "justus"].forEach(id => eq(A.D.totalWins(id), B.D.totalWins(id), "Wins " + id));
+});
+
+t("Cloud: falscher Code verbindet nicht und legt nichts an", async () => {
+  const cl = fakeCloud();
+  const B = geraet(cl);
+  eq(await B.D.cloudVerbinden("ABCD-EFGH-JKLM"), "fehler");
+  eq(B.D.cloudStand().code, null);
+  ok(/gibt es nicht/.test(B.D.cloudStand().msg), "sagt warum: " + B.D.cloudStand().msg);
+  eq(cl.rows.size, 0, "keine Zeile angelegt");
+  eq(await B.D.cloudVerbinden("ABC"), "ungueltig", "zu kurz");
+});
+
+t("Cloud: Ruhe = 0 Uploads - zwei Geraete, 10 Takte ohne Aenderung", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(B.D, ["lion", "arne"], 1);
+  await A.D.cloudNeu();
+  await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 3);
+  const vorher = cl.pushes;
+  await takte([A, B], 10);
+  eq(cl.pushes - vorher, 0, "kein einziger Upload in Ruhe");
+  eq(A.D.cloudStand().hoch + B.D.cloudStand().hoch, vorher, "Zaehler der Geraete stimmt mit der Cloud");
+  // Ein Dart im laufenden Spiel aendert den gemeinsamen Teil nicht - auch kein Upload.
+  A.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  throwDart(A.D, "T20"); throwDart(A.D, "T20");
+  await takte([A, B], 2);
+  eq(cl.pushes - vorher, 0, "laufendes Spiel geht nicht in die Cloud");
+  eq(JSON.parse(cl.rows.get(A.D.cloudStand().code).data).match, undefined, "kein match im gemeinsamen Stand");
+});
+
+t("Cloud: drei Geraete, abwechselnd gespielt, konvergieren ueber mehrere Takte", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl), C = geraet(cl);
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  await B.D.cloudVerbinden(code); await C.D.cloudVerbinden(code);
+  for (let runde = 0; runde < 4; runde++) {
+    playMatch(A.D, ["lion", "arne"], runde % 2);
+    playMatch(B.D, ["justus", "arne"], 0);
+    C.D.bullSieg(["lion", "justus"], "justus");
+    await takte([C, A, B], 1);
+  }
+  await takte([A, B, C], 2);
+  eq(A.D.getHistory().length, 8); eq(B.D.getHistory().length, 8); eq(C.D.getHistory().length, 8);
+  eq(sig(A), sig(B)); eq(sig(B), sig(C));
+  const vorher = cl.pushes;
+  await takte([A, B, C], 5);
+  eq(cl.pushes, vorher, "danach Ruhe");
+});
+
+t("Cloud: geloeschte Bull-Runde bleibt geloescht, auf allen Geraeten", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  A.D.bullSieg(["lion", "arne"], "lion");
+  A.D.bullSieg(["lion", "arne"], "arne");
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 2);
+  eq(B.D.getState().bull.length, 2);
+  A.D.bullZurueck();                                  // die juengste (arne) weg
+  await takte([A, B], 4);
+  eq(A.D.getState().bull.length, 1, "bei A nicht zurueckgekommen");
+  eq(B.D.getState().bull.length, 1, "bei B auch weg");
+  eq(B.D.getState().bull[0].winnerId, "lion");
+  eq(sig(A), sig(B));
+});
+
+t("Cloud: geloeschter Spieler bleibt geloescht - und lebt wieder, wenn er neu angelegt wird", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  A.D.getRoster().push({ id: "timo", name: "Timo", winsManual: 0, guest: true });
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 2);
+  ok(B.D.getRoster().some(p => p.id === "timo"), "B kennt Timo");
+  A.D.setView("roster"); A.D.render();
+  A.answers.confirm = true;
+  A.click("del", { "data-id": "timo" });
+  await takte([A, B], 3);
+  ok(!A.D.getRoster().some(p => p.id === "timo"), "A: weg");
+  ok(!B.D.getRoster().some(p => p.id === "timo"), "B: auch weg");
+  await schlaf(3);
+  B.D.setView("roster"); B.D.render();
+  B.els.newName.value = "Timo";
+  B.click("add", { "data-guest": "1" });
+  await takte([B, A], 3);
+  ok(A.D.getRoster().some(p => p.name === "Timo"), "neu angelegt nach dem Loeschen lebt er");
+  eq(sig(A), sig(B));
+});
+
+t("Cloud: Verlauf loeschen gilt fuer alle - die Wins bleiben, neue Spiele des anderen auch", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 2);
+  const lion = A.D.totalWins("lion");
+  playMatch(B.D, ["arne", "justus"], 0);            // B spielt, bevor A loescht - noch nicht abgeglichen
+  A.D.setView("settings"); A.D.render();
+  A.answers.confirm = true;
+  A.click("s_clearhist");
+  await takte([A, B], 3);
+  eq(A.D.getHistory().length, 1, "nur Bs neues Spiel bleibt");
+  eq(B.D.getHistory().length, 1);
+  eq(A.D.totalWins("lion"), lion, "Lions Siege bleiben bei A");
+  eq(B.D.totalWins("lion"), lion, "und bei B");
+  eq(sig(A), sig(B));
+});
+
+t("Cloud: Umbenennen konvergiert - nacheinander und gleichzeitig", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 1);
+  A.D.setView("roster"); A.D.render();
+  A.answers.prompt = "Arne G.";
+  A.click("rename", { "data-id": "arne" });
+  await takte([A, B], 2);
+  eq(B.D.nameOf("arne"), "Arne G.", "B sieht den neuen Namen");
+  await schlaf(3);
+  // Gleichzeitig auf beiden Geraeten, vor dem naechsten Abgleich.
+  A.answers.prompt = "Arne A"; A.D.setView("roster"); A.D.render(); A.click("rename", { "data-id": "arne" });
+  B.answers.prompt = "Arne B"; B.D.setView("roster"); B.D.render(); B.click("rename", { "data-id": "arne" });
+  B.D.getRoster().find(p => p.id === "arne").geaendert = A.D.getRoster().find(p => p.id === "arne").geaendert;
+  await takte([A, B], 3);
+  eq(A.D.nameOf("arne"), B.D.nameOf("arne"), "beide haben denselben Namen");
+  eq(sig(A), sig(B));
+  const vorher = cl.pushes; await takte([A, B], 4);
+  eq(cl.pushes, vorher, "und streiten danach nicht mehr");
+});
+
+t("Cloud: dasselbe Spiel auf zwei Handys beendet (Raum-Sync) zaehlt nur EINMAL", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 1);
+  const w0 = A.D.totalWins("lion");
+  A.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  A.D.setScore(0, 40); throwDart(A.D, "D20");
+  const m = JSON.parse(JSON.stringify(A.D.getMatch()));
+  ok(m.finished, "A hat gewonnen");
+  // Das beendete Spiel kommt ueber ntfy bei B an - B traegt es in seinen Verlauf.
+  B.D.syncUebernehmen({ v: 1, uhr: 99, von: "ANDERES", match: m });
+  A.D.finishMatch();
+  eq(A.D.getHistory().length, 1); eq(B.D.getHistory().length, 1);
+  await takte([A, B], 3);
+  eq(A.D.getHistory().length, 1, "A: einmal");
+  eq(B.D.getHistory().length, 1, "B: einmal");
+  eq(A.D.totalWins("lion"), w0 + 1, "ein Sieg, nicht zwei");
+  eq(B.D.totalWins("lion"), w0 + 1);
+  eq(sig(A), sig(B));
+});
+
+t("Cloud: offline gespielt geht nicht verloren und wird nachgeholt", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  cl.offline = true;
+  playMatch(A.D, ["lion", "arne"], 0);
+  eq(await A.D.cloudAbgleich(), "offline");
+  eq(A.D.cloudStand().status, "offline");
+  A.D.setView("home"); A.D.render();
+  ok(/wird nachgeholt/.test(A.app.innerHTML), "Startseite sagt es");
+  A.D.setView("settings"); A.D.render();
+  ok(/offline &ndash; wird nachgeholt/.test(A.app.innerHTML), "Einstellungen sagen es");
+  eq(A.D.getHistory().length, 1, "das Spiel ist da");
+  const neu = reboot(A);                            // App weggewischt, waehrend offline
+  neu.D.setCloudTransport(cl.fetch); neu.D.setCloudPlaner(() => 0);
+  cl.offline = false;
+  await neu.D.cloudLauf();                          // der Abgleich beim Start (lief noch offline? egal)
+  await takte([neu, B], 2);
+  eq(B.D.getHistory().length, 1, "nachgeholt: B hat das Offline-Spiel");
+  eq(sig(neu), sig(B));
+});
+
+t("Cloud: Abgleich beim Start laeuft ueber denselben Weg (fetch des Browsers)", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu();
+  // Ein anderes Geraet hat inzwischen geschrieben.
+  const row = cl.rows.get(A.D.cloudStand().code);
+  const d = JSON.parse(row.data); d.history.push(eintrag("fremd1", 1000, "arne")); row.data = JSON.stringify(d); row.rev++;
+  const neu = boot(Object.fromEntries(A.store), { fetch: cl.fetch });
+  await neu.D.cloudLauf();
+  eq(neu.D.getHistory().length, 2, "beim Start geholt, ohne dass jemand tippt");
+});
+
+t("Cloud: Konflikt - beide schreiben gleichzeitig, beide Spiele bleiben", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 1);
+  playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(B.D, ["justus", "arne"], 0);
+  // Beide holen dieselbe Fassung, beide wollen hochladen: einer bekommt "konflikt".
+  let warten = [];
+  cl.bremse = () => new Promise(r => warten.push(r));
+  const pa = A.D.cloudAbgleich(), pb = B.D.cloudAbgleich();
+  const loesen = async () => { while (warten.length || A.D.cloudStand().laeuft || B.D.cloudStand().laeuft) {
+    const w = warten; warten = []; w.forEach(f => f()); await schlaf(0); } };
+  await Promise.all([pa, pb, loesen()]);
+  cl.bremse = null;
+  await takte([A, B], 2);
+  eq(A.D.getHistory().length, 2, "A hat beide");
+  eq(B.D.getHistory().length, 2, "B hat beide");
+  eq(sig(A), sig(B));
+});
+
+t("Cloud: Konflikt-Retry gibt nach drei Versuchen mit Meldung auf statt endlos", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  playMatch(A.D, ["lion", "arne"], 0);
+  // Ein anderes Geraet schreibt jedes Mal dazwischen.
+  const echt = cl.fetch;
+  A.D.setCloudTransport((url, opt) => {
+    if (String(url).endsWith("darts_push")) { const r = cl.rows.get(code); r.rev++; }
+    return echt(url, opt);
+  });
+  eq(await A.D.cloudAbgleich(), "fehler");
+  ok(/gleichzeitig/.test(A.D.cloudStand().grund), A.D.cloudStand().grund);
+  eq(A.D.getHistory().length, 1, "nichts verloren");
+});
+
+t("Cloud: Namensvettern beim ersten Verbinden werden EIN Spieler", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);                 // A: Lion heisst "lion"
+  // B: Lion wurde (vor 1.47, also ohne Grabstein) geloescht und neu angelegt -> "lionx".
+  const sb = B.D.getState();
+  sb.roster = sb.roster.filter(p => p.id !== "lion");
+  sb.history.push(eintrag("alt-b", 5000, "lion"));
+  sb.roster.push({ id: "lionx", name: "Lion", winsManual: 0, guest: false });
+  sb.history.push(eintrag("neu-b", 9000, "lionx", ["lionx", "arne"]));
+  B.D.setState(sb);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 3);
+  [A, B].forEach((g, i) => {
+    const lions = g.D.getRoster().filter(p => p.name === "Lion");
+    eq(lions.length, 1, "Geraet " + i + ": ein Lion");
+    eq(lions[0].id, "lion", "die kleinere Kennung bleibt");
+    ok(!g.D.getHistory().some(m => m.players.some(p => p.id === "lionx")), "keine lionx-Spiele mehr");
+  });
+  eq(A.D.totalWins("lion"), B.D.totalWins("lion"));
+  eq(A.D.historyWins("lion"), 3, "alle drei Siege bei lion");
+  eq(sig(A), sig(B));
+  // Ein Neuer namens Lionx bekommt nicht die tote Kennung.
+  B.D.getState().settings.meId = "lion";
+  A.D.setView("roster"); A.D.render(); A.answers.confirm = false;
+  ok(A.D.idBelegt("lionx"), "lionx ist vergeben, solange der Alias steht");
+});
+
+t("Cloud: Deckel auf zwei Geraeten zaehlt den gekappten Sieg EINMAL", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  const st = A.D.getState();
+  for (let i = 0; i < 500; i++) st.history.push(eintrag("h" + i, 10000 + i, "lion"));
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 2);
+  eq(B.D.getHistory().length, 500);
+  const w = A.D.totalWins("lion");
+  // Beide spielen ihr 501. Spiel - jedes Geraet kappt fuer sich.
+  playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(B.D, ["lion", "arne"], 0);
+  await takte([A, B], 3);
+  eq(A.D.getHistory().length, 500, "Deckel haelt");
+  eq(A.D.totalWins("lion"), w + 2, "zwei neue Siege, kein doppelt gezaehlter alter");
+  eq(B.D.totalWins("lion"), w + 2);
+  eq(A.D.getRoster().find(p => p.id === "lion").winsManual, 1, "winsManual bleibt unangetastet");
+  eq(sig(A), sig(B));
+  const vorher = cl.pushes; await takte([A, B], 3); eq(cl.pushes, vorher, "Ruhe nach dem Kappen");
+});
+
+t("Cloud: Zuruecksetzen betrifft nur dieses Geraet und trennt es", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 2);
+  B.D.setView("settings"); B.D.render(); B.answers.confirm = true;
+  B.click("s_reset");
+  eq(B.D.cloudStand().code, null, "B ist getrennt");
+  eq(B.D.getHistory().length, 0, "B ist leer");
+  await takte([A, B], 3);
+  eq(A.D.getHistory().length, 1, "A behaelt alles");
+  eq(JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.length, 1, "Cloud behaelt alles");
+  // Wieder verbinden bringt alles zurueck.
+  await B.D.cloudVerbinden(A.D.cloudStand().code);
+  eq(B.D.getHistory().length, 1);
+});
+
+t("Cloud: Sicherung einspielen ersetzt hier, aber vereinigt mit der Cloud", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([A, B], 2);
+  playMatch(B.D, ["justus", "arne"], 0);
+  await takte([B], 1);                               // Cloud hat 2, A weiss noch nichts
+  const leer = boot().D.defaultState();
+  leer.history = [eintrag("aus-der-sicherung", 777, "arne")];
+  eq(A.D.importText(JSON.stringify({ app: "darts", v: 2, state: leer })), null);
+  await takte([A, B], 3);
+  eq(A.D.getHistory().length, 3, "Sicherung + beide alten Spiele");
+  eq(B.D.getHistory().length, 3);
+});
+
+t("Cloud: ein haengender Abgleich schreibt nach dem Trennen nichts mehr", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  playMatch(B.D, ["justus", "arne"], 0);
+  await takte([B], 1);
+  let los; cl.bremse = () => new Promise(r => { los = r; });
+  const p = A.D.cloudAbgleich();
+  await schlaf(0);
+  A.D.cloudTrennen();
+  const vorher = cl.pushes;
+  los(); cl.bremse = null;
+  eq(await p, "abgebrochen");
+  eq(A.D.getHistory().length, 0, "das geholte Spiel wurde nicht mehr eingetragen");
+  eq(cl.pushes, vorher, "nichts hochgeladen");
+});
+
+t("Cloud: parallele Ausloeser laufen nicht doppelt", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  const p1 = A.D.cloudAbgleich(), p2 = A.D.cloudAbgleich(), p3 = A.D.cloudAbgleich();
+  ok(p1 === p2 && p2 === p3, "derselbe Lauf");
+  await p1;
+  eq(cl.pulls, 1, "ein Abruf");
+});
+
+t("Cloud: Aenderung loest nach dem Speichern einen entprellten Abgleich aus", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  const geplant = [];
+  A.D.setCloudPlaner((fn, ms) => { geplant.push({ fn, ms }); return geplant.length; });
+  A.D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  throwDart(A.D, "T20");
+  ok(geplant.length > 0, "save() plant");
+  eq(geplant[0].ms, 2000, "zwei Sekunden entprellt");
+  const p0 = cl.pulls;
+  geplant.forEach(g => g.fn());
+  await A.D.cloudLauf();
+  eq(cl.pulls, p0, "ein Dart aendert den gemeinsamen Teil nicht: kein Abruf");
+  A.D.setScore(0, 40); throwDart(A.D, "D20"); A.D.finishMatch();
+  geplant.forEach(g => g.fn());
+  await A.D.cloudLauf();
+  eq(JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.length, 1, "Spielende geht hoch");
+});
+
+t("Cloud: 'online' holt nach", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  cl.offline = true;
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudAbgleich();
+  cl.offline = false;
+  (A.events.online || []).forEach(f => f());
+  await A.D.cloudLauf();
+  eq(JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.length, 1);
+  eq(A.D.cloudStand().status, "ok");
+});
+
+t("Cloud: Verlustschutz - ein Stand ohne Spiele ueberschreibt keinen mit Spielen", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  const r = await cl.fetch("x/rest/v1/rpc/darts_push", { body: JSON.stringify({
+    p_code: code, p_rev: 1, p_data: { v: 1, roster: [], history: [], grab: {} } }) }).then(x => x.json());
+  eq(r.fehler, "verlust");
+  // Mit Grabstein ist es ein echtes Loeschen und geht durch (siehe "Verlauf loeschen").
+});
+
+t("Cloud: Server-Fehler wird mit Grund angezeigt, nicht als offline versteckt", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  A.D.setCloudTransport(() => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) }));
+  eq(await A.D.cloudAbgleich(), "fehler");
+  ok(/503/.test(A.D.cloudStand().grund), A.D.cloudStand().grund);
+  A.D.setView("settings"); A.D.render();
+  ok(/503/.test(A.app.innerHTML), "steht im Block");
+});
+
+t("Cloud: gemeinsamer Teil enthaelt weder Spiel noch Einstellungen noch Uebung", async () => {
+  const { D } = boot();
+  D.startMatch(["lion", "arne"], { gameType: 501, doubleOut: true, bestOf: 1 });
+  D.getSettings().inputMode = "sum";
+  const g = D.gemeinsam();
+  eq(Object.keys(g).sort(), ["alias", "bull", "eingefroren", "grab", "history", "practice", "roster", "v"]);
+});
+
+t("Cloud: Eintraege ohne id bekommen beim Laden eine stabile id aus dem Inhalt", () => {
+  const s = boot().D.defaultState();
+  s.history = [eintrag("x", 5, "lion")]; delete s.history[0].id;
+  s.practice = [{ ts: 1, ended: 2, mode: "double", playerId: "lion", score: 3, max: 21, darts: 30 }];
+  s.bull = [{ ts: 3, winnerId: "lion", players: [{ id: "lion", name: "Lion" }, { id: "arne", name: "Arne" }] }];
+  const roh = JSON.stringify(s);
+  const a = boot({ darts_v2: roh }).D.getState(), b = boot({ darts_v2: roh }).D.getState();
+  ok(a.history[0].id && a.practice[0].id && a.bull[0].id, "alle haben eine id");
+  eq(a.history[0].id, b.history[0].id, "zweimal geladen, dieselbe id");
+  eq(a.practice[0].id, b.practice[0].id);
+  eq(a.bull[0].id, b.bull[0].id);
+});
+
+t("Cloud: boesartiger Stand aus der Cloud bricht nicht aus den data-Attributen aus", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  const row = cl.rows.get(A.D.cloudStand().code);
+  const d = JSON.parse(row.data);
+  d.roster.push({ id: 'x" data-act="s_reset', name: "<img src=x>", winsManual: 0 });
+  d.history.push(Object.assign(eintrag("__proto__", 1, "lion"), {}));
+  d.history.push(eintrag("ok1", 2, 'a"b'));
+  d.alias = { lion: "zzz", "a": "b" };                   // zeigt nach oben: wird verworfen
+  row.data = JSON.stringify(d); row.rev++;
+  await A.D.cloudAbgleich();
+  A.D.setView("home"); A.D.render();
+  ok(!/data-act="s_reset"/.test(A.app.innerHTML), "kein eingeschleuster Knopf");
+  ok(!/<img src=x>/.test(A.app.innerHTML), "Name escaped");
+  ok(!A.D.getHistory().some(m => m.id === "__proto__"), "__proto__ kommt nicht rein");
+  ok(A.D.getRoster().some(p => p.id === "lion"), "Lion nicht wegaliasiert");
+});
+
+t("Cloud: Bedienung - Neu anlegen, Code eingeben, Verbinden, Trennen per Klick", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  A.D.setView("settings"); A.D.render();
+  ok(/Gemeinsamer Spielstand/.test(A.app.innerHTML), "Block da");
+  ok(A.app.innerHTML.indexOf("Gemeinsamer Spielstand") < A.app.innerHTML.indexOf(">Sicherung<"), "ueber der Sicherung");
+  A.click("cl_neu");
+  await A.D.cloudLauf(); await schlaf(0);
+  const code = A.D.cloudStand().code;
+  ok(code, "verbunden");
+  ok(A.app.innerHTML.includes(A.D.cloudCodeZeigen(code)), "Code steht gross da");
+  ok(/verbunden/.test(A.app.innerHTML), "Status");
+  B.D.setView("settings"); B.D.render();
+  B.els.cloudCodeEin.value = " " + A.D.cloudCodeZeigen(code).toLowerCase() + " ";
+  B.click("cl_bei");
+  await schlaf(0); await B.D.cloudLauf(); await schlaf(0);
+  eq(B.D.cloudStand().code, code, "B verbunden");
+  eq(B.D.getHistory().length, 1, "Spiel ist da");
+  ok(/zuletzt abgeglichen \d\d:\d\d/.test(B.app.innerHTML), "Uhrzeit steht da");
+  B.D.setView("home"); B.D.render();
+  ok(/Gemeinsamer Spielstand &middot; 1 Spiel im Verlauf/.test(B.app.innerHTML), "Startseite sagt die Wahrheit");
+  ok(!/Alles bleibt auf diesem Handy/.test(B.app.innerHTML));
+  B.D.setView("settings"); B.D.render(); B.answers.confirm = true;
+  B.click("cl_aus");
+  eq(B.D.cloudStand().code, null, "getrennt");
+  eq(B.D.getHistory().length, 1, "Daten bleiben hier");
+  ok(!B.store.has("darts_cloud"), "Merker weg");
+});
+
+t("Cloud: iPhone-Hinweis steht beim Code, Safari-Warnung nur in Safari", () => {
+  const A = boot();
+  A.D.setView("settings"); A.D.render();
+  ok(/installierten App/.test(A.app.innerHTML), "Hinweis da");
+  ok(!/gerade in <b>Safari/.test(A.app.innerHTML), "kein Safari");
+  const S = boot({}, { navigator: { userAgent: "Mozilla/5.0 (iPhone) AppleWebKit Version/17 Mobile Safari/604.1" } });
+  S.win.matchMedia = () => ({ matches: false });
+  S.D.setView("settings"); S.D.render();
+  ok(/gerade in <b>Safari/.test(S.app.innerHTML), "Safari-Warnung");
+});
+
+t("Cloud: Rueckfragen sagen, dass Loeschen alle Geraete betrifft", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu();
+  const fragen = [];
+  A.win.confirm = q => { fragen.push(q); return false; };
+  A.D.setView("settings"); A.D.render();
+  A.click("s_clearhist"); A.click("s_reset");
+  ok(/ALLEN verbundenen Geräten/.test(fragen[0]), fragen[0]);
+  ok(/vom gemeinsamen Spielstand getrennt/.test(fragen[1]), fragen[1]);
+  A.D.setView("roster"); A.D.render();
+  A.click("del", { "data-id": "arne" });
+  ok(/alle verbundenen Geräte/.test(fragen[2]), fragen[2]);
+});
+
+// ---- Fuzz: die Vereinigung ist kommutativ, idempotent, absorbierend --------
+// Ohne diese drei Eigenschaften konvergiert kein Abgleich (Lehre 1 und 6).
+function zufall(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function zufallsStand(r, ohneVettern) {
+  const namen = ["Lion", "Arne", "Justus", "Timo", ohneVettern ? "Lionel" : "Lion", "Max"];
+  const ids = ["lion", "arne", "justus", "timo", "lionx", "max"];
+  const roster = [];
+  ids.forEach((id, i) => { if (r() < 0.7) roster.push({ id, name: r() < 0.15 ? namen[i] + "!" : namen[i],
+    guest: r() < 0.3, winsManual: Math.floor(r() * 4), geaendert: r() < 0.3 ? 0 : Math.floor(r() * 5) }); });
+  const pool = n => Math.floor(r() * n);
+  const history = [], practice = [], bull = [], grab = {}, eingefroren = {}, alias = {};
+  for (let i = 0; i < 12; i++) if (r() < 0.5) {
+    const a = ids[pool(6)], b = ids[pool(6)];
+    const e = eintrag("h" + i, 1000 + i * 10 + (r() < 0.2 ? 1 : 0), r() < 0.5 ? a : b, a === b ? [a] : [a, b]);
+    history.push(e);
+  }
+  for (let i = 0; i < 8; i++) if (r() < 0.5)
+    practice.push({ id: "p" + i, ts: i, ended: 50 + i, mode: r() < 0.5 ? "double" : "around",
+      playerId: ids[pool(6)], score: pool(21), max: 21, darts: 21 + pool(30) });
+  for (let i = 0; i < 8; i++) if (r() < 0.5)
+    bull.push({ id: "b" + i, ts: 70 + i, winnerId: "lion", players: [{ id: "lion", name: "Lion" }, { id: ids[1 + pool(5)], name: "X" }] });
+  for (let i = 0; i < 4; i++) if (r() < 0.3) grab["h:h" + pool(12)] = 1 + pool(9);
+  if (r() < 0.3) grab["b:b" + pool(8)] = 5;
+  if (r() < 0.3) grab["s:" + ids[pool(6)] ] = 1 + pool(6);
+  if (r() < 0.2) eingefroren["h" + pool(12)] = ids[pool(6)];
+  if (r() < 0.2 && !ohneVettern) alias["lionx"] = "lion";
+  return { v: 1, roster, history, practice, bull, grab, eingefroren, alias };
+}
+
+t("Cloud-Fuzz: 300 Zufallspaare - A+B = B+A, (A+B)+A = A+B, X+X = X", () => {
+  const { D } = boot();
+  const r = zufall(4711);
+  let geprueft = 0;
+  for (let i = 0; i < 300; i++) {
+    const a = zufallsStand(r), b = zufallsStand(r);
+    const ab = D.standVereinen(a, b), ba = D.standVereinen(b, a);
+    eq(D.stabil(ab), D.stabil(ba), "kommutativ (Paar " + i + ")");
+    eq(D.stabil(D.standVereinen(ab, a)), D.stabil(ab), "absorbierend A (Paar " + i + ")");
+    eq(D.stabil(D.standVereinen(ab, b)), D.stabil(ab), "absorbierend B (Paar " + i + ")");
+    eq(D.stabil(D.standVereinen(ab, ab)), D.stabil(ab), "idempotent (Paar " + i + ")");
+    geprueft++;
+  }
+  eq(geprueft, 300);
+});
+
+// Ohne Namensvettern ist die Vereinigung streng assoziativ. MIT Vettern nicht ganz:
+// ein einmal gesetzter Alias bleibt (gewollt - sonst wanderten Spiele zwischen zwei
+// Kennungen hin und her), und ob er entsteht, kann von der Reihenfolge abhaengen
+// (gemessen: 4 von 60 Gruppen). Dass die Geraete trotzdem auf EINEN Stand kommen,
+// prueft der Protokoll-Fuzz darunter - die Cloud reiht die Vereinigungen auf.
+t("Cloud-Fuzz: 60 Dreiergruppen ohne Namensvettern - assoziativ, egal wer zuerst abgleicht", () => {
+  const { D } = boot();
+  const r = zufall(99);
+  for (let i = 0; i < 60; i++) {
+    const a = zufallsStand(r, true), b = zufallsStand(r, true), c = zufallsStand(r, true);
+    const x = D.standVereinen(D.standVereinen(a, b), c);
+    const y = D.standVereinen(a, D.standVereinen(b, c));
+    const z = D.standVereinen(D.standVereinen(c, a), b);
+    eq(D.stabil(x), D.stabil(y), "(A+B)+C = A+(B+C), Gruppe " + i);
+    eq(D.stabil(x), D.stabil(z), "(C+A)+B, Gruppe " + i);
+  }
+});
+
+t("Cloud-Fuzz: drei Geraete, 200 zufaellige Aktionen und Takte -> ein Stand, dann Ruhe", async () => {
+  const cl = fakeCloud();
+  const G = [geraet(cl), geraet(cl), geraet(cl)];
+  await G[0].D.cloudNeu();
+  const code = G[0].D.cloudStand().code;
+  await G[1].D.cloudVerbinden(code); await G[2].D.cloudVerbinden(code);
+  const r = zufall(2026);
+  let gespielt = 0;
+  for (let i = 0; i < 200; i++) {
+    const g = G[Math.floor(r() * 3)], D = g.D, w = r();
+    if (w < 0.25) { playMatch(D, ["lion", "arne"], r() < 0.5 ? 0 : 1); gespielt++; }
+    else if (w < 0.4) D.bullSieg(["lion", "justus"], r() < 0.5 ? "lion" : "justus");
+    else if (w < 0.45) D.bullZurueck();
+    else if (w < 0.5) D.bumpWins("justus", 1);
+    else if (w < 0.55) { const p = D.getRoster().find(x => x.id === "arne"); if (p) { p.name = "Arne " + i; p.geaendert = Date.now() + i; D.render(); } }
+    else if (w < 0.6) cl.offline = !cl.offline;
+    else await D.cloudAbgleich();
+  }
+  cl.offline = false;
+  await takte(G, 4);
+  eq(sig(G[0]), sig(G[1]), "Geraet 1 = 2");
+  eq(sig(G[1]), sig(G[2]), "Geraet 2 = 3");
+  ok(G[0].D.getHistory().length >= 1 && G[0].D.getHistory().length <= gespielt, "Spiele da");
+  // Kein Spiel verloren: jedes je gespielte Spiel ist in der Cloud.
+  const inCloud = JSON.parse(cl.rows.get(code).data).history.length;
+  eq(inCloud, gespielt, "alle " + gespielt + " Spiele angekommen");
+  const vorher = cl.pushes;
+  await takte(G, 5);
+  eq(cl.pushes, vorher, "Ruhe = 0 Uploads");
+});
+
+t("Cloud-Fuzz: 40 Laeufe mit Namensvettern - drei Geraete mit Zufallsstaenden konvergieren", async () => {
+  const r = zufall(31337);
+  for (let lauf = 0; lauf < 40; lauf++) {
+    const cl = fakeCloud();
+    const G = [0, 1, 2].map(() => {
+      const g = geraet(cl);
+      const z = zufallsStand(r);
+      const s = g.D.getState();
+      s.roster = z.roster.length ? z.roster : s.roster; s.history = z.history; s.practice = z.practice;
+      s.bull = z.bull; s.grab = z.grab; s.eingefroren = z.eingefroren; s.alias = z.alias;
+      return g;
+    });
+    await G[0].D.cloudNeu();
+    const code = G[0].D.cloudStand().code;
+    // Zufaellige Reihenfolge der Abgleiche, mit Umbenennungen dazwischen.
+    const reihe = [1, 2].sort(() => r() - 0.5);
+    for (const i of reihe) await G[i].D.cloudVerbinden(code);
+    for (let k = 0; k < 6; k++) {
+      const g = G[Math.floor(r() * 3)];
+      if (r() < 0.3) { const p = g.D.getRoster()[Math.floor(r() * g.D.getRoster().length)];
+        if (p) { p.name = r() < 0.5 ? "Lion" : p.name + "!"; p.geaendert = 100 + lauf * 10 + k; } }
+      await g.D.cloudAbgleich();
+    }
+    await takte(G, 4);
+    eq(sig(G[0]), sig(G[1]), "Lauf " + lauf + ": 1 = 2");
+    eq(sig(G[1]), sig(G[2]), "Lauf " + lauf + ": 2 = 3");
+    const vorher = cl.pushes; await takte(G, 3);
+    eq(cl.pushes, vorher, "Lauf " + lauf + ": Ruhe");
+  }
+});
+
+// ---- Lions laufendes Spiel: ein 1.46-Stand laedt unveraendert --------------
+t("Cloud: laufendes Spiel aus 1.46 laedt unveraendert - Stand, dran, Aufnahme, Undo", async () => {
+  const altHtml = (() => {
+    try { return execSync("git show 2213f8c:index.html", { cwd: root, encoding: "utf8", maxBuffer: 1e8 }); }
+    catch (e) { return null; }
+  })();
+  ok(altHtml && /var VER\s+= "1\.46"/.test(altHtml), "1.46 aus der Historie geholt");
+  const altCode = altHtml.match(/<script>([\s\S]*?)<\/script>/)[1];
+  // Die alte Fassung im selben Stub laufen lassen: so entsteht ein echter 1.46-Stand.
+  const store = new Map();
+  const alt = boot({}, { code: altCode, store });
+  alt.D.startMatch(["lion", "arne", "justus"], { gameType: 501, doubleOut: true, bestOf: 3 });
+  throwDart(alt.D, "T20"); throwDart(alt.D, "T19"); throwDart(alt.D, "20"); alt.D.endTurn();
+  throwDart(alt.D, "T20"); throwDart(alt.D, "5");                    // Aufnahme halb
+  const vorher = JSON.parse(alt.store.get("darts_v2")).match;
+  const neu = boot(Object.fromEntries(alt.store));
+  const m = neu.D.getMatch();
+  eq(m.players.map(p => p.score), vorher.players.map(p => p.score), "Stand");
+  eq(m.currentIdx, vorher.currentIdx, "wer dran ist");
+  eq(m.currentTurn, vorher.currentTurn, "angefangene Aufnahme");
+  eq(m._undo.length, vorher._undo.length, "Undo-Stapel");
+  eq(neu.D.getView(), "game", "landet im Spiel");
+  neu.D.undo();
+  eq(neu.D.getMatch().currentTurn.length, vorher.currentTurn.length - 1, "Undo geht");
+  // Verbinden waehrend des Spiels fasst das Spiel nicht an.
+  const cl = fakeCloud();
+  neu.D.setCloudTransport(cl.fetch); neu.D.setCloudPlaner(() => 0);
+  const davor = JSON.stringify(neu.D.getMatch());
+  await neu.D.cloudNeu();
+  await neu.D.cloudAbgleich();
+  eq(JSON.stringify(neu.D.getMatch()), davor, "Spiel unberuehrt");
 });
 
 // ---------------------------------------------------------------- Ausgabe
