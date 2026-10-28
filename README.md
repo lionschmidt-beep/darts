@@ -46,11 +46,16 @@ Aufnahme, höchstem Finish, 180ern oder Spielen.
 180er und die letzten zwölf Begegnungen. Im laufenden Spiel steht der Duellstand im Kopf.
 Gezählt werden nur echte Duelle zu zweit — Runden mit mehr Leuten stehen separat darunter.
 
-**Bull-Nähe** — wer am nächsten am Bull steckt, gewinnt. Gespielt wird an der Scheibe,
-die App hält nur den Sieger fest: Mitspieler antippen, dann „X hat gewonnen". Eigene
-Bull-Bilanz (Siege, Runden, Quote) und die letzten Runden, letzter Eintrag löschbar.
-Zählt bewusst nicht in Team-Rangliste und Duelle. Liegt im Stand (Feld `bull`) und
-damit auch in der Sicherung, wird aber nicht aufs zweite Handy gesynct.
+**Bull-Nähe** (seit 1.47 ein Spiel mit Leben) — jeder startet mit 1 bis 5 Leben (zuletzt
+gewählt bleibt vorbelegt). Ab zwei Spielern lost dasselbe Rad wie bei X01 den Anwurf aus
+(Schalter „Anwurf auslosen"), danach wandert er je Runde weiter, nur unter den Lebenden.
+Je Runde: „Bull! +1" bei einem Treffer, „Am weitesten weg" kostet ein Leben und beendet die
+Runde. Bei 0 Leben ist man raus, der Letzte gewinnt. In die Bull-Bilanz zählt nur der
+Gesamtsieger (Siege, Spiele, Quote, Bulls). Allein gespielt läuft es, bis die Leben weg
+sind, ohne Sieg – nur die Bulls zählen. Letzter Tipp zurück, Spiel abbrechen ohne Eintrag.
+Einträge bis 1.46 (nur der Sieger einer Runde) bleiben und zählen weiter als ein Sieg.
+Zählt bewusst nicht in Team-Rangliste und Duelle. Das laufende Spiel liegt lokal
+(`bullSpiel`), der fertige Eintrag in `bull` und damit im gemeinsamen Spielstand.
 
 **Allein üben** — X01 gegen den eigenen Rekord (wenigste Darts), Doppel-Training
 (D1 bis Bull, drei Darts pro Ziel) und Around the Clock. Übungsläufe zählen nicht in die
@@ -74,16 +79,42 @@ Triple 20, Triple 18, Doppel 12". Beides in **einer** Ansage –
 `speechSynthesis.cancel()` leert die ganze Schlange, zwei `say()` hintereinander schneiden
 einander ab.
 
-**Einstellungen** — Standardmodus, Ausgang, Legs, Doppel-In, Ansage, Verlauf, Sicherung.
+**Einstellungen** — Standardmodus, Ausgang, Legs, Doppel-In, Ansage, Verlauf, zweites Handy,
+gemeinsamer Spielstand, Sicherung.
 
 Während gespielt wird, bleibt der Bildschirm an (`wakeLock`) — zwischen zwei Aufnahmen
 vergehen leicht zwei Minuten, in denen niemand das Handy anfasst.
 
 ## Speicher
 
-Alles liegt im `localStorage` dieses Browsers — kein Server, kein Sync, keine Konten.
-**Cache leeren oder Handy wechseln heißt: weg.** Darum gibt es unter Einstellungen →
-Sicherung einen Export als Datei oder in die Zwischenablage und einen Import zurück.
+Alles liegt im `localStorage` dieses Browsers. Ohne Verbindung gilt: **Cache leeren oder
+Handy wechseln heißt weg.** Darum gibt es unter Einstellungen → Sicherung einen Export als
+Datei oder in die Zwischenablage und einen Import zurück.
+
+**Gemeinsamer Spielstand (seit 1.47)** — Einstellungen → Gemeinsamer Spielstand →
+„Neu anlegen" zeigt einen Code `XXXX-XXXX-XXXX`; auf jedem weiteren Gerät denselben Code
+eingeben → „Verbinden". Danach liegen **Team, Verlauf, Übungen und Bull-Einträge** in EINEM
+Stand bei Supabase (EU, Projekt `ijxlbeezxfoxzrgtbyhn`, Tabelle `darts_stand`), jedes
+verbundene Gerät zeigt dieselben Zahlen. **Nicht** geteilt: das laufende Spiel (dafür ist
+der Raum über ntfy da), Übung/Bull-Spiel in Arbeit, Einstellungen (Laptop ≠ Handy).
+Kein Konto: **der Code ist der Schlüssel.** Die Tabelle ist für den öffentlichen Schlüssel
+gesperrt; lesen und schreiben geht nur über `darts_pull`/`darts_push`, die den Code
+verlangen (`supabase/migrations/20261028210000_darts_stand.sql`).
+
+- Abgleich beim Start, beim Zurückkommen in die App, wenn das Netz wiederkommt, 2 s nach
+  einer Änderung und sonst jede Minute bei offener Seite. In Ruhe geht nichts hoch.
+- **Zusammengeführt, nie ersetzt:** Einträge nach `id` vereinigt; jede Löschung (Spieler,
+  Bull-Eintrag, Verlauf, Kappen über 500/300/1000) hinterlässt einen Grabstein in `grab`,
+  damit sie auf allen Geräten gilt; Team-Änderungen tragen einen Stempel `geaendert`.
+  Gekappte und gelöschte Siege zählen als `eingefroren` (nach Spiel-id, nie doppelt).
+  Derselbe Mensch mit zwei Kennungen (`lion`/`lionx`) wird zusammengelegt (`alias`).
+- Beim Verbinden liegt der vorherige Stand als `darts_v2_vor_verbund` daneben.
+- „Alles zurücksetzen" setzt nur dieses Gerät zurück und trennt es; „Verlauf löschen"
+  gilt verbunden für alle Geräte.
+- Offline bleibt alles hier und wird nachgeholt. Verlustschutz in der Datenbank: ein
+  Stand ohne die Spiele der Cloud (und ohne Grabstein dafür) wird abgelehnt.
+- 🔴 **iPhone:** die App vom Home-Bildschirm und Safari haben **getrennten** Speicher —
+  den Code in der installierten App eingeben.
 
 🔴 **In Safari löscht iOS gespeicherte Daten nach sieben Tagen ohne Besuch** — außer die
 Seite liegt über „Zum Home-Bildschirm" als App auf dem Gerät. Genau der Fall „einmal die
@@ -93,7 +124,7 @@ Die App sagt es auch sonst, wenn etwas nicht stimmt: kann das Gerät nicht speic
 im Privatmodus), liegt oben ein rotes Band. Ist der gespeicherte Stand beschädigt, wird der
 Rohtext unter `darts_v2_defekt` beiseitegelegt, bevor irgendetwas ihn überschreibt. Ist
 die App in zwei Fenstern offen, warnt sie, statt den Verlauf des anderen zu löschen.
-„Verlauf löschen" friert die erreichten Wins vorher als Zahl ein.
+„Verlauf löschen" friert die erreichten Wins vorher ein.
 
 ## Entwicklung
 
@@ -102,7 +133,7 @@ Single-File-App: `index.html`. Kein Build, kein npm. Dazu `manifest.webmanifest`
 eine alte Fassung auf dem Handy festzunageln).
 
 ```
-node test/run.mjs      # 371 Logik-Tests, ohne Abhängigkeiten
+node test/run.mjs      # 421 Logik-Tests, ohne Abhängigkeiten
 ```
 
 Der Testrunner zieht den `<script>`-Block aus `index.html` und führt ihn gegen einen
