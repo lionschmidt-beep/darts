@@ -5081,7 +5081,9 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="bullundo"){
     var lz=state.bull[0];
-    if(lz && confirm("Letzten Eintrag löschen ("+nameOf(lz.winnerId)+" gewinnt, "+fmtDate(lz.ts)+")?")){
+    var lzWer = lz && (lz.winnerId ? nameOf(lz.winnerId)+" gewinnt"
+                       : (lz.players && lz.players[0] ? nameOf(lz.players[0].id)+" allein" : "allein"));
+    if(lz && confirm("Letzten Eintrag löschen ("+lzWer+", "+fmtDate(lz.ts)+")?")){
       bullZurueck(); bullMsg="";
     }
     render(); return;
