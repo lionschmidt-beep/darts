@@ -2529,6 +2529,10 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", async () => {
   // Bull-Naehe: "Letzten Eintrag loeschen" gibt es erst ab einer Runde.
   D.bullSieg(["lion", "arne"], "lion");
   D.setView("bull"); D.render(); sammle();
+  // Bull-Spiel mit Leben: Runde (Treffer, Weitester, Zurueck, Abbrechen), dann Ende.
+  D.bullStart(["lion", "arne"], 1); D.render(); sammle();
+  D.bullWeitester("arne"); D.render(); sammle();
+  D.bullAbbrechen(); D.setView("bull"); D.render();
 
   // Das Anwurf-Rad erscheint nur, solange der Anwurf nicht ausgelost ist - und
   // es zeigt zwei verschiedene Knopf-Saetze, vor und nach dem Drehen.
@@ -5612,15 +5616,24 @@ t("Sortieren nach Schnitt stellt die Statistik um", () => {
 });
 
 // ---------------------------------------------------------------- Bull-Naehe
-t("Bull-Naehe: Sieger antippen speichert ihn und uebersteht den Neustart", () => {
+// Seit 1.47 ein Spiel mit Leben (Lions Nachtrag 28.10.). Die drei Tests der alten
+// Bedienung "Sieger antippen" pruefen dieselbe Absicht jetzt ueber den neuen Ablauf.
+// Ein Bull-Spiel per Klick zu Ende bringen: der Weiteste verliert, bis einer uebrig ist.
+function bullSpielen(ctx, verlierer) {
+  for (const id of verlierer) ctx.click("bullweit", { "data-id": id });
+}
+t("Bull-Naehe: Spielsieger wird gespeichert und uebersteht den Neustart", () => {
   const ctx = boot();
   const D = ctx.D;
   D.setView("bull"); D.render();
-  ok(ctx.has("bullwin", { "data-id": "arne" }), "Sieger-Knopf fuer Arne fehlt");
-  ctx.click("bullwin", { "data-id": "arne" });
-  ctx.click("bullwin", { "data-id": "arne" });
-  ctx.click("bullwin", { "data-id": "lion" });
-  eq(D.getState().bull.length, 3, "drei Runden gespeichert");
+  ctx.click("bullleben", { "data-n": 1 });
+  ctx.click("bullstart");
+  bullSpielen(ctx, ["justus", "lion"]);              // Arne bleibt uebrig
+  ctx.click("bullnochmal");
+  bullSpielen(ctx, ["lion", "justus"]);
+  ctx.click("bullnochmal");
+  bullSpielen(ctx, ["arne", "justus"]);              // Lion gewinnt
+  eq(D.getState().bull.length, 3, "drei Spiele gespeichert");
   eq(D.getState().bull[0].players.map(p => p.id), ["arne", "justus", "lion"], "alle drei waren dabei");
   const neu = reboot(ctx);
   const b = neu.D.bullBilanz();
@@ -5633,23 +5646,29 @@ t("Bull-Naehe zaehlt nicht in die Team-Rangliste und nicht in den Verlauf", () =
   const ctx = boot();
   const D = ctx.D;
   D.setView("bull"); D.render();
-  ctx.click("bullwin", { "data-id": "lion" });
+  ctx.click("bullleben", { "data-n": 1 });
+  ctx.click("bullstart");
+  bullSpielen(ctx, ["arne", "justus"]);
   eq(D.getHistory().length, 0, "X01-Verlauf bleibt leer");
   D.setView("home"); D.render();
-  ok(/1 Runde/.test(ctx.app.innerHTML), "Startseite zeigt die Bull-Runde");
+  ok(/1 Runde/.test(ctx.app.innerHTML), "Startseite zeigt den Bull-Eintrag");
 });
 
-t("Bull-Naehe: abgewaehlter Spieler ist nicht dabei, unter zwei gibt es keinen Knopf", () => {
+t("Bull-Naehe: abgewaehlter Spieler ist nicht dabei, ohne Spieler kein Start", () => {
   const ctx = boot();
   const D = ctx.D;
   D.setView("bull"); D.render();
   ctx.click("bullpick", { "data-id": "justus" });
-  ok(!ctx.has("bullwin", { "data-id": "justus" }), "Justus ist abgewaehlt");
-  ctx.click("bullwin", { "data-id": "lion" });
+  ctx.click("bullleben", { "data-n": 1 });
+  ctx.click("bullstart");
+  ok(!ctx.has("bullweit", { "data-id": "justus" }), "Justus ist abgewaehlt");
+  bullSpielen(ctx, ["arne"]);
   eq(D.getState().bull[0].players.map(p => p.id), ["arne", "lion"], "nur Arne und Lion");
+  ctx.click("bullfertig");
   ctx.click("bullpick", { "data-id": "arne" });
-  ok(!ctx.has("bullwin"), "allein gibt es keinen Sieger");
-  eq(D.bullSieg(["lion"], "lion"), null, "Logik lehnt einen Einzelnen ab");
+  ctx.click("bullpick", { "data-id": "lion" });
+  ok(!ctx.has("bullstart"), "ohne Spieler gibt es keinen Start");
+  eq(D.bullSieg(["lion"], "lion"), null, "die alte Schnell-Eingabe lehnt einen Einzelnen weiter ab");
 });
 
 t("Bull-Naehe: letzten Eintrag loeschen, Sicherung bringt die Runden mit", () => {
@@ -5674,7 +5693,7 @@ t("Bull-Naehe: alter Stand ohne Bull-Feld laedt sauber", () => {
   const ctx = boot({ darts_v2: JSON.stringify(s) });
   eq(ctx.D.getState().bull, [], "leeres Feld nachgezogen");
   ctx.D.setView("bull"); ctx.D.render();
-  ok(/Noch keine Runde/.test(ctx.app.innerHTML), "Ansicht laeuft ohne Daten");
+  ok(/Noch kein Spiel eingetragen/.test(ctx.app.innerHTML), "Ansicht laeuft ohne Daten");
 });
 
 // ================================================================ Gemeinsamer Spielstand
@@ -6446,6 +6465,184 @@ t("Cloud: laufendes Spiel aus 1.46 laedt unveraendert - Stand, dran, Aufnahme, U
   await neu.D.cloudNeu();
   await neu.D.cloudAbgleich();
   eq(JSON.stringify(neu.D.getMatch()), davor, "Spiel unberuehrt");
+});
+
+// ---------------------------------------------------------------- Bull-Naehe mit Leben
+const leben = D => D.getBullSpiel().players.map(p => p.id + ":" + p.leben).join(" ");
+t("Bull-Leben: Weitester verliert eins, Bull gibt eins, bei 0 raus, der Letzte gewinnt EINMAL", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.bullStart(["lion", "arne", "justus"], 2);
+  eq(leben(D), "lion:2 arne:2 justus:2", "alle mit 2");
+  D.bullTreffer("lion");
+  eq(leben(D), "lion:3 arne:2 justus:2", "Bull +1");
+  eq(D.getBullSpiel().runde, 1, "ein Bull beendet die Runde nicht");
+  D.bullWeitester("arne");
+  eq(leben(D), "lion:3 arne:1 justus:2"); eq(D.getBullSpiel().runde, 2, "Weitester beendet die Runde");
+  D.bullWeitester("arne");
+  eq(D.getBullSpiel().raus, ["arne"], "Arne raus");
+  ok(!D.bullTreffer("arne") && !D.bullWeitester("arne"), "wer raus ist, hat keine Knoepfe mehr");
+  D.setView("bull"); D.render();
+  ok(!ctx.has("bullweit", { "data-id": "arne" }), "keine Knoepfe fuer Arne");
+  D.bullWeitester("justus"); D.bullWeitester("justus");
+  ok(D.getBullSpiel().fertig, "zu Ende");
+  eq(D.getBullSpiel().winnerId, "lion");
+  eq(D.getState().bull.length, 1, "ein Eintrag");
+  const r = D.getState().bull[0];
+  eq([r.art, r.startLeben, r.winnerId, r.raus, r.bulls], ["leben", 2, "lion", ["arne", "justus"], { lion: 1 }]);
+  const b = D.bullBilanz();
+  eq(b.find(e => e.id === "lion").siege, 1, "ein Sieg, nicht einer je Runde");
+  eq(b.find(e => e.id === "lion").bulls, 1, "Bulls gezaehlt");
+  D.render();
+  ok(/lion gewinnt|Lion gewinnt/.test(ctx.app.innerHTML), "Siegerbild");
+});
+
+t("Bull-Leben: Anwurf wandert je Runde weiter, nur unter den Lebenden", () => {
+  const { D } = boot();
+  D.bullStart(["lion", "arne", "justus", "timo"].filter(Boolean).slice(0, 3), 3);
+  const bs = D.getBullSpiel();
+  eq(bs.anwurfOffen, false, "Rad im Test aus (anwurfRad=false)");
+  eq(D.bullReihe(bs).map(p => p.id), ["lion", "arne", "justus"], "Runde 1 ab Lion");
+  D.bullWeitester("lion");
+  eq(D.bullReihe(D.getBullSpiel()).map(p => p.id), ["arne", "justus", "lion"], "Runde 2 ab Arne");
+  D.bullWeitester("justus"); D.bullWeitester("justus"); D.bullWeitester("justus");   // Justus raus
+  const r = D.bullReihe(D.getBullSpiel()).map(p => p.id);
+  ok(!r.includes("justus"), "Justus ist nicht mehr in der Reihe");
+  // Runde 2 ab arne, 3 ab justus, 4 ab lion, nach Justus' Aus: weiter ueber ihn hinweg.
+  eq(r[0], "arne", "der Anwurf springt ueber den Ausgeschiedenen");
+});
+
+t("Bull-Leben: das Rad loest den Anwurf aus - und ist aus, wenn anwurfRad aus ist", () => {
+  const ctx = boot({}, { rad: true });
+  const D = ctx.D;
+  D.setView("bull"); D.render();
+  ctx.click("bullstart");
+  ok(D.getBullSpiel().anwurfOffen, "Rad offen");
+  ok(ctx.has("raddreh"), "Rad steht da");
+  ok(!ctx.has("bullweit"), "noch keine Runde");
+  D.setAnwurfIdx ? null : null;
+  D.getBullSpiel().anwurfIdx = 2;                    // das Los faellt in JS - hier gesetzt
+  D.render();
+  ctx.click("radweiter");
+  eq(D.getBullSpiel().anwurfOffen, false);
+  eq(D.bullReihe(D.getBullSpiel())[0].id, "lion", "der Ausgeloste (Index 2 = Lion) faengt an");
+  ok(ctx.has("bullweit"), "jetzt die Runde");
+  ok(ctx.gesagt.some(s => /Lion fängt an/.test(s)), "angesagt");
+  const aus = boot({}, { rad: true });
+  aus.D.getSettings().anwurfRad = false;
+  aus.D.bullStart(["lion", "arne"], 3);
+  eq(aus.D.getBullSpiel().anwurfOffen, false, "Schalter aus = kein Rad");
+  const solo = boot({}, { rad: true });
+  solo.D.bullStart(["lion"], 3);
+  eq(solo.D.getBullSpiel().anwurfOffen, false, "allein kein Rad");
+});
+
+t("Bull-Leben: Solo laeuft bis die Leben weg sind - ohne Sieg, mit Bulls", () => {
+  const { D } = boot();
+  D.bullStart(["lion"], 2);
+  D.bullTreffer("lion"); D.bullWeitester("lion"); D.bullWeitester("lion");
+  ok(!D.getBullSpiel().fertig, "noch ein Leben");
+  D.bullWeitester("lion");
+  ok(D.getBullSpiel().fertig, "Ende");
+  eq(D.getBullSpiel().winnerId, null, "kein Sieger");
+  const r = D.getState().bull[0];
+  eq([r.winnerId, r.runden, r.bulls.lion], [null, 3, 1]);
+  const e = D.bullBilanz().find(x => x.id === "lion");
+  eq([e.siege, e.runden, e.bulls], [0, 0, 1], "Quote unberuehrt, Bull zaehlt");
+  // Ein Solo-Eintrag ohne Sieger uebersteht Neustart und Cloud-Normalisierung.
+  const neu = boot({ darts_v2: JSON.stringify(D.getState()) });
+  eq(neu.D.getState().bull.length, 1, "ueberlebt das Laden");
+  eq(neu.D.gemeinsam().bull.length, 1, "und den gemeinsamen Stand");
+});
+
+t("Bull-Leben: Rueckgaengig nimmt den letzten Tipp zurueck - auch das Spielende", () => {
+  const { D } = boot();
+  D.bullStart(["lion", "arne"], 1);
+  D.bullTreffer("arne");
+  D.bullRueckgaengig();
+  eq(leben(D), "lion:1 arne:1", "Bull zurueck");
+  D.bullWeitester("lion");
+  ok(D.getBullSpiel().fertig); eq(D.getState().bull.length, 1);
+  D.bullRueckgaengig();
+  ok(!D.getBullSpiel().fertig, "wieder offen");
+  eq(leben(D), "lion:1 arne:1");
+  eq(D.getState().bull.length, 0, "Eintrag wieder weg");
+  ok(Object.keys(D.getState().grab).some(k => k.startsWith("b:")), "mit Grabstein, sonst kaeme er per Abgleich zurueck");
+  D.bullWeitester("arne");
+  eq(D.getState().bull.length, 1, "neues Ende, neuer Eintrag");
+  eq(D.getState().bull[0].winnerId, "lion");
+  ok(!D.getState().grab["b:" + D.getState().bull[0].id], "der neue Eintrag ist nicht begraben");
+});
+
+t("Bull-Leben: Abbrechen fragt nach und traegt nichts ein", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.bullStart(["lion", "arne"], 3);
+  D.bullWeitester("lion");
+  D.setView("bull"); D.render();
+  ctx.answers.confirm = false; ctx.click("bullabbruch");
+  ok(D.getBullSpiel(), "Nein = laeuft weiter");
+  ctx.answers.confirm = true; ctx.click("bullabbruch");
+  eq(D.getBullSpiel(), null, "weg");
+  eq(D.getState().bull.length, 0, "kein Eintrag");
+  ok(ctx.has("bullstart"), "zurueck auf der Aufstellung");
+});
+
+t("Bull-Leben: laufendes Spiel uebersteht den Neustart (Ansicht, Leben, Rueckgaengig)", () => {
+  const ctx = boot();
+  const D = ctx.D;
+  D.setView("bull"); D.render();
+  ctx.click("bullleben", { "data-n": 4 });
+  ctx.click("bullstart");
+  ctx.click("bulltreffer", { "data-id": "arne" });
+  ctx.click("bullweit", { "data-id": "lion" });
+  const neu = reboot(ctx);
+  eq(neu.D.getView(), "bull", "landet wieder im Bull-Spiel");
+  eq(leben(neu.D), "arne:5 justus:4 lion:3");
+  eq(neu.D.getBullSpiel().runde, 2);
+  neu.D.render();
+  ok(neu.has("bullweit", { "data-id": "lion" }), "Knoepfe da");
+  neu.click("bullrueck");
+  eq(leben(neu.D), "arne:5 justus:4 lion:4", "Rueckgaengig nach dem Neustart");
+  eq(neu.D.getSettings().bullLeben, 4, "die Lebenswahl ist gemerkt");
+  neu.D.setView("home"); neu.D.render();
+  ok(/Spiel läuft/.test(neu.app.innerHTML), "Startseite sagt, dass ein Bull-Spiel laeuft");
+});
+
+t("Bull-Leben: das laufende Spiel geht nicht in den gemeinsamen Stand, der Eintrag schon", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  A.D.bullStart(["lion", "arne"], 2);
+  A.D.bullTreffer("lion"); A.D.bullWeitester("arne");
+  await takte([A, B], 2);
+  const roh = cl.rows.get(A.D.cloudStand().code).data;
+  ok(!/bullSpiel/.test(roh), "laufendes Spiel nicht in der Cloud");
+  A.D.bullWeitester("arne");
+  await takte([A, B], 2);
+  eq(B.D.getState().bull.length, 1, "der fertige Eintrag ist bei B");
+  const r = B.D.getState().bull[0];
+  eq([r.art, r.runden, r.bulls, r.raus], ["leben", 2, { lion: 1 }, ["arne"]], "mit allen Zusatzfeldern");
+  eq(B.D.bullBilanz().find(e => e.id === "lion").bulls, 1);
+  eq(sig(A), sig(B));
+  // Rueckgaengig nach dem Abgleich: der Eintrag verschwindet auch bei B.
+  A.D.bullRueckgaengig();
+  await takte([A, B], 3);
+  eq(B.D.getState().bull.length, 0, "zurueckgenommen auf allen Geraeten");
+});
+
+t("Bull-Leben: alte Bull-Eintraege (nur Sieger) laden und zaehlen unveraendert", () => {
+  const s = boot().D.defaultState();
+  s.bull = [
+    { id: "alt1", ts: 1, winnerId: "arne", players: [{ id: "arne", name: "Arne" }, { id: "lion", name: "Lion" }] },
+    { id: "alt2", ts: 2, winnerId: "lion", players: [{ id: "arne", name: "Arne" }, { id: "lion", name: "Lion" }] },
+    { id: "alt3", ts: 3, winnerId: "arne", players: [{ id: "arne", name: "Arne" }, { id: "lion", name: "Lion" }] }];
+  const ctx = boot({ darts_v2: JSON.stringify(s) });
+  const b = ctx.D.bullBilanz();
+  eq(b.map(e => [e.id, e.siege, e.runden, e.bulls]), [["arne", 2, 3, 0], ["lion", 1, 3, 0]]);
+  eq(ctx.D.getState().bull.map(r => r.id).sort(), ["alt1", "alt2", "alt3"], "unveraendert");
+  ctx.D.setView("bull"); ctx.D.render();
+  ok(/BULL-BILANZ/.test(ctx.app.innerHTML));
 });
 
 // ---------------------------------------------------------------- Ausgabe
