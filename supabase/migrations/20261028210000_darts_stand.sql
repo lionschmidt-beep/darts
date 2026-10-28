@@ -76,8 +76,8 @@ begin
     return jsonb_build_object('fehler', 'format');
   end if;
   -- Ein echter Stand (500 Spiele, 300 Uebungen, 1000 Bull-Eintraege) liegt weit
-  -- darunter; die App selbst laedt ab 1 MB nicht mehr hoch.
-  if octet_length(p_data::text) > 1000000 then
+  -- darunter; die App selbst laedt ab 850 KB JSON nicht mehr hoch (jsonb-Text ist ~12 % laenger).
+  if octet_length(p_data::text) > 2000000 then
     return jsonb_build_object('fehler', 'zu_gross');
   end if;
 

@@ -2574,7 +2574,9 @@ t("Jede Aktion im Handler wird auch irgendwo angeboten", async () => {
   // Der gemeinsame Spielstand zeigt Code, Abgleichen und Trennen erst, wenn
   // dieses Geraet verbunden IST - und Teilen nur, wo der Browser teilen kann.
   {
-    const v = boot({ darts_cloud: JSON.stringify({ code: "ABCDEFGHJKLM", rev: 1 }) },
+    // ... und nach dem ersten Verbinden die Zeile "vorher -> nachher" mit dem Rueckweg.
+    const v = boot({ darts_cloud: JSON.stringify({ code: "ABCDEFGHJKLM", rev: 1, vorher: { lion: 0 } }),
+                     darts_v2_vor_verbund: "{}" },
                    { navigator: { share: () => Promise.resolve() } });
     v.D.setView("settings"); v.D.render();
     (v.app.innerHTML.match(/data-act="([a-z_0-9]+)"/g) || [])
@@ -5717,7 +5719,7 @@ function fakeCloud() {
     if (!d || typeof d !== "object" || !Array.isArray(d.history) || !Array.isArray(d.roster))
       return { fehler: "format" };
     const roh = JSON.stringify(d);
-    if (roh.length > 1000000) return { fehler: "zu_gross" };
+    if (roh.length > 2000000) return { fehler: "zu_gross" };
     const r = rows.get(a.p_code);
     if (!r) {
       if ((a.p_rev || 0) !== 0) return { fehler: "unbekannt" };
@@ -6332,6 +6334,101 @@ t("Cloud: HTML aus dem gemeinsamen Stand kommt nicht in die Ansicht", async () =
     ok(v !== "h2h" || /gewinnt/.test(A.app.innerHTML), "Duell-Ansicht zeigt das Spiel");
   }
   eq(A.D.entschaerfen({ a: ["<b>", 1 / 0], "<x>": 1 }).a[0], "b", "tief entschaerft");
+});
+
+// --- Auflagen aus Lions GO 1.47 (zweite blinde Pruefung) ---------------------
+t("Cloud: Stand-Austausch waehrend des Hochladens - der Abgleich heilt in 1-2 Takten", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  const leer = A.store.get("darts_v2") || JSON.stringify(A.D.getState());   // alter Stand, 0 Spiele
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  playMatch(B.D, ["lion", "arne"], 0);
+  await takte([B, A], 1);
+  playMatch(A.D, ["lion", "arne"], 1);                  // A hat etwas Neues -> laedt hoch
+  const warten = [];
+  cl.bremse = () => new Promise(r => warten.push(r));
+  const p = A.D.cloudAbgleich();
+  for (let i = 0; i < 20 && !warten.length; i++) await schlaf(0);
+  warten.shift()();                                     // Pull darf durch
+  for (let i = 0; i < 20 && !warten.length; i++) await schlaf(0);
+  ok(warten.length === 1, "der Push haengt");
+  // Jetzt schreibt das Nachbarfenster seinen alten Stand (0 Spiele) - A uebernimmt ihn.
+  A.store.set("darts_v2", leer);
+  (A.events.storage || []).forEach(f => f({ key: "darts_v2" }));
+  eq(A.D.getHistory().length, 0, "A zeigt den alten Stand");
+  cl.bremse = null; warten.shift()();
+  await p;
+  await takte([A, B], 2);
+  const n = JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.length;
+  eq(A.D.getHistory().length, n, "A hat wieder alles, was in der Cloud liegt (" + n + ")");
+  eq(A.D.cloudStand().status, "ok", "kein Dauer-'verlust'");
+  eq(sig(A), sig(B), "konvergiert");
+});
+
+t("Cloud: abgelehnt wegen 'verlust' -> der naechste Abgleich holt voll und heilt", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  playMatch(B.D, ["lion", "arne"], 0);
+  await takte([B, A], 1);
+  // A verliert das Spiel lokal ohne Grabstein (so, wie es kein Weg der App tut).
+  const s = A.D.getState(); s.history = []; A.D.setState(s);
+  eq(await A.D.cloudAbgleich(), "fehler", "der Server lehnt ab");
+  await takte([A], 1);
+  eq(A.D.getHistory().length, 1, "zweiter Abgleich holt voll und vereinigt");
+  eq(A.D.cloudStand().status, "ok");
+});
+
+t("Cloud: Namensvettern werden auch zusammengelegt, wenn vor dem ersten Abgleich neu geladen wird", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  const sb = B.D.getState();
+  sb.roster = sb.roster.filter(p => p.id !== "lion");
+  sb.roster.push({ id: "lionx", name: "Lion", winsManual: 0, guest: false });
+  sb.history.push(eintrag("neu-b", 9000, "lionx", ["lionx", "arne"]));
+  B.D.setState(sb);
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  // Verbinden holt den Stand, der Abgleich danach scheitert am Netz.
+  let n = 0;
+  B.D.setCloudTransport((u, o) => (++n >= 2 ? Promise.reject(new TypeError("Failed to fetch")) : cl.fetch(u, o)));
+  await B.D.cloudVerbinden(code);
+  ok(JSON.parse(B.store.get("darts_cloud")).erst === true, "Merker weiss: erster Abgleich steht aus");
+  const B2 = geraet(cl, Object.fromEntries(B.store));   // App neu geladen
+  await takte([B2, A], 3);
+  [A, B2].forEach((g, i) => eq(g.D.getRoster().filter(p => p.name === "Lion").length, 1, "Geraet " + i + ": ein Lion"));
+  ok(!("erst" in JSON.parse(B2.store.get("darts_cloud"))), "nach dem ersten Abgleich geloescht");
+});
+
+t("Cloud: nach dem Verbinden 'Siege vorher -> nachher' und der Weg zurueck", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0); playMatch(A.D, ["lion", "arne"], 0);
+  playMatch(B.D, ["justus", "arne"], 1);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  await takte([B], 1);
+  eq(B.D.getHistory().length, 3, "vereinigt");
+  B.D.setView("settings"); B.D.render();
+  const zeile = (B.app.innerHTML.match(/Siege vor &rarr; nach dem Verbinden:([^<]*(<b>[^<]*<\/b>[^<]*)*)/) || [])[0] || "";
+  const lz = zeile.match(/Lion (\d+) &rarr; <b>(\d+)<\/b>/);
+  ok(lz && +lz[2] - +lz[1] === 2, "Lion +2, hervorgehoben: " + zeile);
+  const az = zeile.match(/Arne (\d+) &rarr; (\d+)/);
+  ok(az && az[1] === az[2], "Arne unveraendert, nicht hervorgehoben");
+  B.answers.confirm = false; B.click("cl_zurueck");
+  eq(B.D.getHistory().length, 3, "abgelehnt -> nichts passiert");
+  B.answers.confirm = true; B.click("cl_zurueck");
+  eq(B.D.getHistory().length, 1, "der Stand von vorher ist zurueck");
+  ok(!B.store.has("darts_cloud"), "getrennt");
+  ok(!B.store.has("darts_v2_vor_verbund"), "die Kopie ist verbraucht");
+  eq(JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.length, 3, "die Cloud bleibt, wie sie ist");
+  // "Passt so" blendet die Zeile aus und behaelt die Verbindung.
+  const C = geraet(cl);
+  await C.D.cloudVerbinden(A.D.cloudStand().code);
+  C.D.setView("settings"); C.D.render();
+  C.click("cl_passt");
+  ok(!/Siege vor &rarr;/.test(C.app.innerHTML), "Zeile weg");
+  ok(C.store.has("darts_cloud"), "noch verbunden");
 });
 
 t("Cloud: Server-Fehler wird mit Grund angezeigt, nicht als offline versteckt", async () => {

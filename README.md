@@ -114,8 +114,15 @@ verlangen (`supabase/migrations/20261028210000_darts_stand.sql`).
   gilt verbunden für alle Geräte.
 - Offline bleibt alles hier und wird nachgeholt. Verlustschutz in der Datenbank: ein
   Stand ohne die Spiele der Cloud (und ohne Grabstein dafür) wird abgelehnt.
+- Nach dem ersten Verbinden zeigt der Block „Siege vor → nach dem Verbinden" je
+  Stammspieler; „Stand von vorher zurückholen" stellt `darts_v2_vor_verbund` wieder her
+  und trennt, „Passt so" blendet die Zeile aus.
 - 🔴 **iPhone:** die App vom Home-Bildschirm und Safari haben **getrennten** Speicher —
   den Code in der installierten App eingeben.
+- **Offen:** Grabsteine und eingefrorene Siege wachsen ohne Grenze (~59 Bytes je
+  gekapptem Spiel, die 850-KB-Grenze der App nach grob 5.900 gekappten Spielen erreicht).
+  Der Deckel von 2.000 Ständen lässt sich von Fremden mit eigenen Codes füllen – dann
+  geht nur „Neu anlegen" nicht mehr, bestehende Codes bleiben unberührt.
 
 🔴 **In Safari löscht iOS gespeicherte Daten nach sieben Tagen ohne Besuch** — außer die
 Seite liegt über „Zum Home-Bildschirm" als App auf dem Gerät. Genau der Fall „einmal die
@@ -134,7 +141,7 @@ Single-File-App: `index.html`. Kein Build, kein npm. Dazu `manifest.webmanifest`
 eine alte Fassung auf dem Handy festzunageln).
 
 ```
-node test/run.mjs      # 429 Logik-Tests, ohne Abhängigkeiten
+node test/run.mjs      # 433 Logik-Tests, ohne Abhängigkeiten
 ```
 
 Der Testrunner zieht den `<script>`-Block aus `index.html` und führt ihn gegen einen

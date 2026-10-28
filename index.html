@@ -990,7 +990,7 @@ var CLOUD_URL = "https://ijxlbeezxfoxzrgtbyhn.supabase.co/rest/v1/rpc/";
 var CLOUD_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlqeGxiZWV6eGZveHpyZ3RieWhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5Nzg3NjIsImV4cCI6MjA5MjU1NDc2Mn0.6OLN0b8d-1W0Br0kcmldUADtRAgb-AeRvEVZ8LR80xQ";
 var CLOUD_ABC = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // wie syncCode(): ohne I/O/1/0
 var CLOUD_RE  = /^[A-HJ-NP-Z2-9]{12}$/;
-var CLOUD_MAX = 950000;       // die Datenbank nimmt bis 1 MB, der Rest ist Luft
+var CLOUD_MAX = 850000;       // die Datenbank nimmt bis 2 MB jsonb-Text (der ist ~12 % laenger) - viel Luft
 var CLOUD_TAKT = 60000;       // so oft wird bei offener Seite nachgesehen
 var KEY_CLOUD = "darts_cloud";
 var cloudFetch = null;        // im Test austauschbar, wie syncFetch
@@ -1004,7 +1004,6 @@ var cloudNochmal = false;     // waehrend des Laufs kam eine neue Aenderung
 // Nur wenn beide uebereinstimmen, darf "nichts Neues in der Cloud" heissen "hier
 // ist alles drin" - sonst wird voll geholt und vereinigt (kritiker 28.10., t2/t4).
 var cloudBasis = null;
-var cloudErst = null;         // Code, dessen erster Abgleich nach dem Verbinden laeuft
 var cloudStatus = "aus";      // aus | laeuft | ok | offline | fehler
 var cloudGrund = "";          // bei fehler: warum, in Worten
 var cloudHochgeladen = 0;     // wie oft wirklich hochgeladen wurde (Test: Ruhe = 0)
@@ -1014,8 +1013,15 @@ var cloudMsg = "";
 function cloudHolen(){
   try{
     var c = JSON.parse(localStorage.getItem(KEY_CLOUD) || "null");
-    if(c && CLOUD_RE.test(c.code))
-      return { code:c.code, rev:+c.rev||0, sig:c.sig||null, zuletzt:+c.zuletzt||0 };
+    if(c && CLOUD_RE.test(c.code)){
+      var r = { code:c.code, rev:+c.rev||0, sig:c.sig||null, zuletzt:+c.zuletzt||0 };
+      if(c.erst === true) r.erst = true;     // der erste Abgleich nach dem Verbinden steht noch aus
+      if(c.vorher && typeof c.vorher === "object"){
+        r.vorher = {};
+        for(var k in c.vorher) if(/^[a-z0-9-]{1,80}$/.test(k)) r.vorher[k] = ganz(c.vorher[k]);
+      }
+      return r;
+    }
   }catch(e){}
   return {};
 }
@@ -1444,7 +1450,7 @@ function cloudAbgleich(){
   function fremdUebernehmen(rev, daten){
     var fremd = gNormal(daten);
     var vorher = cloudSig(gemeinsamVon(state));
-    var g = standVereinen(gemeinsamVon(state), fremd, cloudErst === code);
+    var g = standVereinen(gemeinsamVon(state), fremd, cloud.erst === true);
     var sigNeu = cloudSig(g);
     if(sigNeu !== vorher){ gemeinsamSetzen(g); cloudGeaendert = true; }
     cloud.rev = rev; cloud.sig = cloudSig(fremd); cloudMerken(); cloudBasis = rev;
@@ -1462,6 +1468,9 @@ function cloudAbgleich(){
           if(++versuche >= 3) throw fehlerMit("Zu viele Geräte schreiben gleichzeitig.");
           return fremdUebernehmen(res.rev, res.data);
         }
+        // Abgelehnt, weil hier etwas fehlt: beim naechsten Mal voll holen und
+        // vereinigen - so heilt es von selbst statt bis zum Neustart abzulehnen.
+        if(res && res.fehler === "verlust") cloudBasis = null;
         throw fehlerMit(res && res.fehler ? res.fehler : "Antwort ohne Ergebnis");
       });
   }
@@ -1482,7 +1491,7 @@ function cloudAbgleich(){
     })
     .then(function(erg){
       if(erg === "abgebrochen" || weg()) return erg;
-      if(cloudErst === code) cloudErst = null;
+      if(cloud.erst) delete cloud.erst;    // erst jetzt: ein Neuladen davor legt sonst nie zusammen
       cloudStatus = "ok"; cloudGrund = ""; cloud.zuletzt = Date.now(); cloudMerken();
       return erg;
     }, function(e){
@@ -1570,8 +1579,11 @@ function cloudVerbinden(eingabe){
     if(!res) return cloudScheitert("Diesen Code gibt es nicht. Auf dem anderen Gerät nachsehen.");
     if(res.fehler) return cloudScheitert(cloudFehlerText(res.fehler));
     try{ localStorage.setItem(KEY + "_vor_verbund", JSON.stringify(state)); }catch(e){}
-    cloud = { code:code, rev:0, sig:null, zuletzt:0 };
-    cloudMerken(); cloudErst = code;
+    // Siege je Stammspieler von vorher - fuer die Zeile "vorher -> nachher".
+    var vorher = {};
+    state.roster.forEach(function(p){ if(!p.guest) vorher[p.id] = totalWins(p.id); });
+    cloud = { code:code, rev:0, sig:null, zuletzt:0, erst:true, vorher:vorher };
+    cloudMerken();
     // Ab hier ist es ein normaler Abgleich - derselbe Weg wie jeder spaetere.
     return cloudAbgleich();
   }, function(e){
@@ -1582,7 +1594,7 @@ function cloudVerbinden(eingabe){
 
 // Trennen: die Daten bleiben hier, nur der Abgleich hoert auf.
 function cloudTrennen(){
-  cloudGen++; cloud = {}; cloudMerken(); cloudBasis = null; cloudErst = null;
+  cloudGen++; cloud = {}; cloudMerken(); cloudBasis = null;
   cloudLauf = null; cloudNochmal = false; cloudStatus = "aus"; cloudGrund = "";
   if(cloudUhr && typeof clearTimeout === "function" && !cloudPlaner) clearTimeout(cloudUhr);
   cloudUhr = null;
@@ -3650,6 +3662,34 @@ function iphoneHinweis(){
         ? '<div class="warnzeile">&#9888;&#65039; Du bist gerade in <b>Safari</b>, nicht in der installierten App.</div>'
         : '');
 }
+// Nach dem ersten Abgleich: haben sich die Siege durchs Zusammenfuehren veraendert?
+// Ein Stand, in dem 1.46 "Verlauf loeschen" Siege nur als Zahl hinterlassen hat,
+// kann beim Vereinigen die groessere Zahl liefern. Darum sichtbar - und solange
+// die Kopie von vorher da ist, ein Weg zurueck.
+function vorVerbund(){ try{ return localStorage.getItem(KEY + "_vor_verbund"); }catch(e){ return null; } }
+function vorherNachher(){
+  if(!cloud.vorher || cloud.erst || !vorVerbund()) return "";
+  var teile = state.roster.filter(function(p){ return !p.guest && (p.id in cloud.vorher); }).map(function(p){
+    var a = cloud.vorher[p.id], b = totalWins(p.id);
+    return esc(p.name) + ' ' + a + ' &rarr; ' + (a !== b ? '<b>' + b + '</b>' : b);
+  });
+  if(!teile.length) return "";
+  return '<div class="sublbl" style="margin-top:10px">Siege vor &rarr; nach dem Verbinden: ' + teile.join(' &middot; ') + '</div>'
+    + '<div class="row" style="margin-top:6px">'
+    +   '<button class="btn ghost" data-act="cl_passt" style="flex:1">Passt so</button>'
+    +   '<button class="btn ghost" data-act="cl_zurueck" style="flex:1">Stand von vorher zurückholen</button>'
+    + '</div>';
+}
+// Den Stand von vor dem Verbinden wiederherstellen - und trennen, sonst kaeme der
+// gemeinsame Stand beim naechsten Abgleich gleich wieder herein.
+function cloudZurueckholen(){
+  var alt = vorVerbund(); if(!alt) return false;
+  cloudTrennen();
+  try{ localStorage.setItem(KEY, alt); localStorage.removeItem(KEY + "_vor_verbund"); }catch(e){ return false; }
+  state = load(); standUebernommen(); cloudBasis = null;
+  view = "settings";
+  return true;
+}
 function cloudBlock(){
   var msg = cloudMsg ? '<div class="sublbl" style="margin-top:6px">' + esc(cloudMsg) + '</div>' : '';
   if(cloudAn()){
@@ -3669,6 +3709,7 @@ function cloudBlock(){
       +   '<button class="btn ghost" data-act="cl_aus">Trennen (Daten bleiben hier)</button>'
       + '</div>'
       + msg
+      + vorherNachher()
       + '<div class="sublbl" style="margin-top:10px">Auf dem anderen Gerät: Einstellungen &rarr; '
       +   'Gemeinsamer Spielstand &rarr; diesen Code eingeben &rarr; Verbinden.</div>'
       + iphoneHinweis()
@@ -5035,6 +5076,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="reloadstate"){
     if(confirm("Stand des anderen Fensters laden? Was hier offen ist, geht verloren.")){
       state = load(); standUebernommen(); cloud = cloudHolen(); cloudBasis = null;
+      cloudGen++; cloudLauf = null; cloudNochmal = false;   // sein Ergebnis gehoert zum alten Stand
       fremdGeschrieben=false; view=restoreView(); render();
     }
     return;
@@ -5130,6 +5172,13 @@ document.getElementById("app").addEventListener("click", function(ev){
     cloudAbgleich().then(function(){ render(); });
     render(); return;
   }
+  if(act==="cl_zurueck"){
+    if(confirm("Stand von vor dem Verbinden zurückholen? Die Verbindung wird getrennt, der gemeinsame Stand bleibt in der Cloud.")){
+      cloudZurueckholen(); cloudMsg = "Stand von vorher zurückgeholt, Verbindung getrennt.";
+    }
+    render(); return;
+  }
+  if(act==="cl_passt"){ try{ localStorage.removeItem(KEY + "_vor_verbund"); }catch(e){} delete cloud.vorher; cloudMerken(); render(); return; }
   if(act==="cl_aus"){
     if(confirm("Vom gemeinsamen Spielstand trennen? Die Daten bleiben auf diesem Gerät, "
                + "es gleicht nur nicht mehr ab.")){ cloudTrennen(); cloudMsg = ""; }
@@ -5480,7 +5529,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 });
 
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
-window.DARTS = { entschaerfen:entschaerfen, cloudBasis:function(){ return cloudBasis; }, bullSieg:bullSieg, bullZurueck:bullZurueck, bullBilanz:bullBilanz,
+window.DARTS = { cloudZurueckholen:cloudZurueckholen, entschaerfen:entschaerfen, cloudBasis:function(){ return cloudBasis; }, bullSieg:bullSieg, bullZurueck:bullZurueck, bullBilanz:bullBilanz,
   bullStart:bullStart, bullTreffer:bullTreffer, bullWeitester:bullWeitester, bullRueckgaengig:bullRueckgaengig,
   bullAbbrechen:bullAbbrechen, bullReihe:bullReihe, getBullSpiel:function(){ return state.bullSpiel; }, checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
@@ -5588,7 +5637,7 @@ if(typeof window.addEventListener === "function"){
     // noch nicht - der naechste Abgleich holt dann voll statt "gleich".
     if(ev && ev.key === KEY_CLOUD){
       var cn = cloudHolen();
-      if(cn.code !== cloud.code){ cloudGen++; cloudLauf = null; cloudNochmal = false; cloudErst = null; cloudBasis = null; }
+      if(cn.code !== cloud.code){ cloudGen++; cloudLauf = null; cloudNochmal = false; cloudBasis = null; }
       else if(cn.rev !== cloud.rev) cloudBasis = null;
       cloud = cn; cloudZeichnen(); return;
     }
@@ -5597,6 +5646,7 @@ if(typeof window.addEventListener === "function"){
     // nichts offen -> einfach uebernehmen. Ein laufendes Bull-Spiel zaehlt als offen.
     if(!state.match && !state.train && !(state.bullSpiel && !state.bullSpiel.fertig)){
       state = load(); standUebernommen(); cloud = cloudHolen(); cloudBasis = null;
+      cloudGen++; cloudLauf = null; cloudNochmal = false;   // sein Ergebnis gehoert zum alten Stand
       fremdGeschrieben = false;
       view = restoreView();
     }
