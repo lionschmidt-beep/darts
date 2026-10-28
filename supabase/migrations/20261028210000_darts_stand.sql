@@ -50,9 +50,12 @@ $$;
 -- Sonst {konflikt:true, rev, data} - das Geraet vereinigt neu und versucht es wieder.
 -- p_rev = 0 heisst "neu anlegen" und geht nur, wenn es den Code noch nicht gibt
 -- (nie in einen fremden Stand hineinschreiben).
--- Verlustschutz: jedes Spiel, das in der Cloud liegt, muss im neuen Stand entweder
--- noch stehen oder einen Grabstein (grab."h:<id>") haben. Ein leerer Stand von
--- einem frischen Geraet kann so nie einen vollen ueberschreiben.
+-- Verlustschutz: jeder Eintrag, der in der Cloud liegt (Spiel, Uebung, Bull), muss
+-- im neuen Stand entweder noch stehen oder einen Grabstein (grab."h:<id>", "p:", "b:")
+-- haben - gepruefte ids, nicht gezaehlte (eine Zaehlung liess einen Stand durch, dem
+-- ein anderes Spiel fehlte, kritiker 28.10.). Ein leerer Stand von einem frischen
+-- Geraet kann so nie einen vollen ueberschreiben. Gegen jemanden, der den Code hat,
+-- schuetzt das nicht (der darf loeschen) - es faengt Fehler der App ab.
 create or replace function public.darts_push(p_code text, p_data jsonb, p_rev bigint, p_geraet text default null)
 returns jsonb
 language plpgsql
@@ -62,9 +65,7 @@ set search_path = public, pg_temp
 as $$
 declare
   r public.darts_stand;
-  n_alt int;
-  n_neu int;
-  n_grab int := 0;
+  n_fehlt int;
 begin
   if p_code is null or p_code !~ '^[A-HJ-NP-Z2-9]{12}$' then
     return jsonb_build_object('fehler', 'code');
@@ -74,7 +75,9 @@ begin
      or jsonb_typeof(p_data->'roster') is distinct from 'array' then
     return jsonb_build_object('fehler', 'format');
   end if;
-  if octet_length(p_data::text) > 2000000 then
+  -- Ein echter Stand (500 Spiele, 300 Uebungen, 1000 Bull-Eintraege) liegt weit
+  -- darunter; die App selbst laedt ab 1 MB nicht mehr hoch.
+  if octet_length(p_data::text) > 1000000 then
     return jsonb_build_object('fehler', 'zu_gross');
   end if;
 
@@ -84,8 +87,10 @@ begin
     if coalesce(p_rev, 0) <> 0 then
       return jsonb_build_object('fehler', 'unbekannt');
     end if;
-    -- Deckel gegen Vollmuellen: weit ueber jedem echten Bedarf.
-    if (select count(*) from public.darts_stand) >= 5000 then
+    -- Deckel gegen Vollmuellen: weit ueber jedem echten Bedarf. Zeilen UND Groesse
+    -- (das Projekt teilt sich die Datenbank mit lernapp).
+    if (select count(*) from public.darts_stand) >= 2000
+       or pg_total_relation_size('public.darts_stand') > 200000000 then
       return jsonb_build_object('fehler', 'voll');
     end if;
     begin
@@ -102,12 +107,25 @@ begin
     return jsonb_build_object('konflikt', true, 'rev', r.rev, 'data', r.data);
   end if;
 
-  n_alt := jsonb_array_length(r.data->'history');
-  n_neu := jsonb_array_length(p_data->'history');
-  if jsonb_typeof(p_data->'grab') = 'object' then
-    select count(*) into n_grab from jsonb_object_keys(p_data->'grab') k where k like 'h:%';
-  end if;
-  if n_neu + n_grab < n_alt then
+  with alt as (
+         select 'h' as art, e->>'id' as id from jsonb_array_elements(case when jsonb_typeof(r.data->'history') = 'array' then r.data->'history' else '[]'::jsonb end) e
+         union all
+         select 'p', e->>'id' from jsonb_array_elements(case when jsonb_typeof(r.data->'practice') = 'array' then r.data->'practice' else '[]'::jsonb end) e
+         union all
+         select 'b', e->>'id' from jsonb_array_elements(case when jsonb_typeof(r.data->'bull') = 'array' then r.data->'bull' else '[]'::jsonb end) e),
+       neu as (
+         select 'h' as art, e->>'id' as id from jsonb_array_elements(p_data->'history') e
+         union all
+         select 'p', e->>'id' from jsonb_array_elements(case when jsonb_typeof(p_data->'practice') = 'array' then p_data->'practice' else '[]'::jsonb end) e
+         union all
+         select 'b', e->>'id' from jsonb_array_elements(case when jsonb_typeof(p_data->'bull') = 'array' then p_data->'bull' else '[]'::jsonb end) e)
+  select count(*) into n_fehlt
+    from alt
+   where alt.id is not null
+     and not exists (select 1 from neu where neu.art = alt.art and neu.id = alt.id)
+     and not (case when jsonb_typeof(p_data->'grab') = 'object'
+                   then p_data->'grab' ? (alt.art || ':' || alt.id) else false end);
+  if n_fehlt > 0 then
     return jsonb_build_object('fehler', 'verlust');
   end if;
 

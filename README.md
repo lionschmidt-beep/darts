@@ -107,7 +107,8 @@ verlangen (`supabase/migrations/20261028210000_darts_stand.sql`).
   Bull-Eintrag, Verlauf, Kappen über 500/300/1000) hinterlässt einen Grabstein in `grab`,
   damit sie auf allen Geräten gilt; Team-Änderungen tragen einen Stempel `geaendert`.
   Gekappte und gelöschte Siege zählen als `eingefroren` (nach Spiel-id, nie doppelt).
-  Derselbe Mensch mit zwei Kennungen (`lion`/`lionx`) wird zusammengelegt (`alias`).
+  Derselbe Mensch mit zwei Kennungen (`lion`/`lionx`), je eine von jedem Gerät, wird beim
+  ersten Verbinden zusammengelegt (`alias`) – später nie mehr.
 - Beim Verbinden liegt der vorherige Stand als `darts_v2_vor_verbund` daneben.
 - „Alles zurücksetzen" setzt nur dieses Gerät zurück und trennt es; „Verlauf löschen"
   gilt verbunden für alle Geräte.
@@ -133,7 +134,7 @@ Single-File-App: `index.html`. Kein Build, kein npm. Dazu `manifest.webmanifest`
 eine alte Fassung auf dem Handy festzunageln).
 
 ```
-node test/run.mjs      # 421 Logik-Tests, ohne Abhängigkeiten
+node test/run.mjs      # 429 Logik-Tests, ohne Abhängigkeiten
 ```
 
 Der Testrunner zieht den `<script>`-Block aus `index.html` und führt ihn gegen einen

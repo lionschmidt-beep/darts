@@ -990,7 +990,7 @@ var CLOUD_URL = "https://ijxlbeezxfoxzrgtbyhn.supabase.co/rest/v1/rpc/";
 var CLOUD_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlqeGxiZWV6eGZveHpyZ3RieWhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5Nzg3NjIsImV4cCI6MjA5MjU1NDc2Mn0.6OLN0b8d-1W0Br0kcmldUADtRAgb-AeRvEVZ8LR80xQ";
 var CLOUD_ABC = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // wie syncCode(): ohne I/O/1/0
 var CLOUD_RE  = /^[A-HJ-NP-Z2-9]{12}$/;
-var CLOUD_MAX = 1900000;      // die Datenbank nimmt bis 2 MB, der Rest ist Luft
+var CLOUD_MAX = 950000;       // die Datenbank nimmt bis 1 MB, der Rest ist Luft
 var CLOUD_TAKT = 60000;       // so oft wird bei offener Seite nachgesehen
 var KEY_CLOUD = "darts_cloud";
 var cloudFetch = null;        // im Test austauschbar, wie syncFetch
@@ -998,6 +998,13 @@ var cloudPlaner = null;       // dito fuer die Entprell-Uhr
 var cloudGen = 0;             // zaehlt jedes Verbinden und Trennen
 var cloudLauf = null;         // der laufende Abgleich - nie zwei gleichzeitig
 var cloudNochmal = false;     // waehrend des Laufs kam eine neue Aenderung
+// Die Fassung (rev), deren Inhalt nachweislich in DIESEM Fenster im Speicher steckt.
+// Nur im Speicher, nie im localStorage: ein zweites Fenster, eine eingespielte
+// Sicherung oder ein Neustart kennen die rev aus dem Merker, aber nicht den Inhalt.
+// Nur wenn beide uebereinstimmen, darf "nichts Neues in der Cloud" heissen "hier
+// ist alles drin" - sonst wird voll geholt und vereinigt (kritiker 28.10., t2/t4).
+var cloudBasis = null;
+var cloudErst = null;         // Code, dessen erster Abgleich nach dem Verbinden laeuft
 var cloudStatus = "aus";      // aus | laeuft | ok | offline | fehler
 var cloudGrund = "";          // bei fehler: warum, in Worten
 var cloudHochgeladen = 0;     // wie oft wirklich hochgeladen wurde (Test: Ruhe = 0)
@@ -1068,6 +1075,22 @@ function sauberId(x){
   s = s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 80);
   return s || null;
 }
+// Alles, was aus dem gemeinsamen Stand kommt, kann von jedem mit dem Code stammen
+// und landet an vielen Stellen roh im HTML (Spielart, Zahlen, Runden). Statt jede
+// Ausgabe einzeln zu sichern: die Zeichen, mit denen man HTML baut, kommen gar
+// nicht erst in einen Eintrag. Schluessel mit solchen Zeichen fallen weg.
+function entschaerfen(x){
+  if(typeof x === "string") return x.replace(/[<>"'`&]/g, "");
+  if(typeof x === "number") return isFinite(x) ? x : 0;
+  if(Array.isArray(x)) return x.map(entschaerfen);
+  if(x && typeof x === "object"){
+    var o = {};
+    for(var k in x) if(Object.prototype.hasOwnProperty.call(x, k) && !/[<>"'`&]/.test(k) && k.slice(0,2) !== "__")
+      o[k] = entschaerfen(x[k]);
+    return o;
+  }
+  return x;
+}
 // Eintrags-Kennungen. "__proto__" und Verwandte bleiben draussen: sie wuerden als
 // Objektschluessel den Prototyp verbiegen statt einen Eintrag anzulegen.
 function eintragId(x){
@@ -1112,7 +1135,7 @@ function gNormal(d){
     var map = Object.create(null);
     (Array.isArray(arr) ? arr : []).forEach(function(e){
       if(!e || typeof e !== "object" || !eintragId(e.id) || !pruef(e)) return;
-      var c = JSON.parse(JSON.stringify(e)); fix(c);
+      var c = entschaerfen(JSON.parse(JSON.stringify(e))); fix(c);
       var alt = map[c.id];
       if(!alt || stabil(c) > stabil(alt)) map[c.id] = c;
     });
@@ -1164,11 +1187,16 @@ function idsSaeubern(m){
 function teamVor(p, q){
   var a = p.geaendert || 0, b = q.geaendert || 0;
   if(a !== b) return a > b;
+  // Ohne Stempel (Stand aus 1.46, Standard-Team eines frischen Geraets) sind die
+  // eingefrorenen Siege in winsManual das, was nicht verloren gehen darf. Als Text
+  // verglichen waere "12" < "3" (kritiker t1).
+  var wa = p.winsManual || 0, wb = q.winsManual || 0;
+  if(wa !== wb) return wa > wb;
   return stabil(p) > stabil(q);
 }
 
 // Die Vereinigung zweier gemeinsamer Staende. Reine Funktion, veraendert nichts.
-function standVereinen(a, b){
+function standVereinen(a, b, vettern){
   a = gNormal(a); b = gNormal(b);
   var grab = {}, alias = {}, eis = {}, k;
   [a, b].forEach(function(x){
@@ -1189,15 +1217,28 @@ function standVereinen(a, b){
   // Namensvettern: derselbe Mensch mit zwei Kennungen (lion/lionx), weil zwei
   // Geraete ihn getrennt angelegt haben. Ohne Zusammenlegen stuende er zweimal in
   // der Rangliste, jeder mit der Haelfte seiner Siege. Die kleinere Kennung bleibt.
-  var gruppen = {};
-  lebend.forEach(function(id){
-    var n = normName(byId[id].name);
-    (gruppen[n] = gruppen[n] || []).push(id);
-  });
-  Object.keys(gruppen).forEach(function(n){
-    var ids = gruppen[n];
-    for(var i = 1; i < ids.length; i++) alias[ids[i]] = ids[0];
-  });
+  // NUR beim ersten Verbinden und nur ueber die zwei Seiten hinweg: zwei Spieler
+  // mit gleichem Namen auf DERSELBEN Seite hat jemand bewusst so angelegt (oder
+  // spaeter so umbenannt) - die fuer immer zu verschmelzen waere nicht umkehrbar
+  // (kritiker t5).
+  if(vettern){
+    var inA = Object.create(null), inB = Object.create(null);
+    a.roster.forEach(function(p){ inA[p.id] = true; });
+    b.roster.forEach(function(p){ inB[p.id] = true; });
+    var gruppen = {};
+    lebend.forEach(function(id){
+      var n = normName(byId[id].name);
+      (gruppen[n] = gruppen[n] || []).push(id);
+    });
+    Object.keys(gruppen).forEach(function(n){
+      var ids = gruppen[n], h0 = ids[0];
+      for(var i = 1; i < ids.length; i++){
+        var x = ids[i];
+        if((inA[h0] && inA[x]) || (inB[h0] && inB[x])) continue;
+        alias[x] = h0;
+      }
+    });
+  }
   function ziel(id){ var n = 0; while(id != null && alias[id] && n++ < 50) id = alias[id]; return id; }
   // Die zusammengelegten Eintraege bekommen die Hauptkennung und laufen dann durch
   // dieselbe Vereinigung wie alle anderen: juengerer Stempel gewinnt. Ein eigener
@@ -1403,10 +1444,10 @@ function cloudAbgleich(){
   function fremdUebernehmen(rev, daten){
     var fremd = gNormal(daten);
     var vorher = cloudSig(gemeinsamVon(state));
-    var g = standVereinen(gemeinsamVon(state), fremd);
+    var g = standVereinen(gemeinsamVon(state), fremd, cloudErst === code);
     var sigNeu = cloudSig(g);
     if(sigNeu !== vorher){ gemeinsamSetzen(g); cloudGeaendert = true; }
-    cloud.rev = rev; cloud.sig = cloudSig(fremd); cloudMerken();
+    cloud.rev = rev; cloud.sig = cloudSig(fremd); cloudMerken(); cloudBasis = rev;
     return sigNeu === cloud.sig ? "gleich" : hochladen(g, rev);
   }
   function hochladen(g, rev){
@@ -1416,7 +1457,7 @@ function cloudAbgleich(){
     return cloudRpc("darts_push", { p_code:code, p_data:g, p_rev:rev, p_geraet:syncGeraeteId() })
       .then(function(res){
         if(weg()) return "abgebrochen";
-        if(res && res.ok){ cloud.rev = res.rev; cloud.sig = cloudSig(g); cloudMerken(); return "hoch"; }
+        if(res && res.ok){ cloud.rev = res.rev; cloud.sig = cloudSig(g); cloudMerken(); cloudBasis = res.rev; return "hoch"; }
         if(res && res.konflikt){
           if(++versuche >= 3) throw fehlerMit("Zu viele Geräte schreiben gleichzeitig.");
           return fremdUebernehmen(res.rev, res.data);
@@ -1425,7 +1466,8 @@ function cloudAbgleich(){
       });
   }
   var cloudGeaendert = false;
-  cloudLauf = cloudRpc("darts_pull", { p_code:code, p_rev:cloud.rev || 0 })
+  var kenne = (cloud.rev && cloudBasis === cloud.rev) ? cloud.rev : 0;
+  cloudLauf = cloudRpc("darts_pull", { p_code:code, p_rev:kenne })
     .then(function(res){
       if(weg()) return "abgebrochen";
       if(!res) throw fehlerMit("unbekannt");
@@ -1440,6 +1482,7 @@ function cloudAbgleich(){
     })
     .then(function(erg){
       if(erg === "abgebrochen" || weg()) return erg;
+      if(cloudErst === code) cloudErst = null;
       cloudStatus = "ok"; cloudGrund = ""; cloud.zuletzt = Date.now(); cloudMerken();
       return erg;
     }, function(e){
@@ -1502,7 +1545,7 @@ function cloudNeu(){
         if(gen !== cloudGen) return "abgebrochen";
         if(res && res.ok){
           cloud = { code:code, rev:res.rev, sig:cloudSig(g), zuletzt:Date.now() };
-          cloudMerken(); cloudStatus = "ok"; return "neu";
+          cloudMerken(); cloudBasis = res.rev; cloudStatus = "ok"; return "neu";
         }
         if(res && res.konflikt && ++versuch < 3) return los();
         return cloudScheitert(res && res.fehler ? cloudFehlerText(res.fehler) : "Anlegen ging nicht.");
@@ -1521,14 +1564,14 @@ function cloudVerbinden(eingabe){
   var code = cloudCodeLesen(eingabe);
   if(!code){ cloudMsg = "Der Code hat 12 Zeichen (ohne I, O, 0 und 1)."; return Promise.resolve("ungueltig"); }
   var gen = ++cloudGen;
-  cloudLauf = null; cloudStatus = "laeuft"; cloudMsg = "";
+  cloudLauf = null; cloudStatus = "laeuft"; cloudMsg = ""; cloudBasis = null;
   return cloudRpc("darts_pull", { p_code:code, p_rev:0 }).then(function(res){
     if(gen !== cloudGen) return "abgebrochen";
     if(!res) return cloudScheitert("Diesen Code gibt es nicht. Auf dem anderen Gerät nachsehen.");
     if(res.fehler) return cloudScheitert(cloudFehlerText(res.fehler));
     try{ localStorage.setItem(KEY + "_vor_verbund", JSON.stringify(state)); }catch(e){}
     cloud = { code:code, rev:0, sig:null, zuletzt:0 };
-    cloudMerken();
+    cloudMerken(); cloudErst = code;
     // Ab hier ist es ein normaler Abgleich - derselbe Weg wie jeder spaetere.
     return cloudAbgleich();
   }, function(e){
@@ -1539,7 +1582,7 @@ function cloudVerbinden(eingabe){
 
 // Trennen: die Daten bleiben hier, nur der Abgleich hoert auf.
 function cloudTrennen(){
-  cloudGen++; cloud = {}; cloudMerken();
+  cloudGen++; cloud = {}; cloudMerken(); cloudBasis = null; cloudErst = null;
   cloudLauf = null; cloudNochmal = false; cloudStatus = "aus"; cloudGrund = "";
   if(cloudUhr && typeof clearTimeout === "function" && !cloudPlaner) clearTimeout(cloudUhr);
   cloudUhr = null;
@@ -1549,7 +1592,11 @@ function cloudTrennen(){
 // Sonst hielte "nichts Neues in der Cloud" den eingespielten Stand fuer aktuell
 // und luede ihn ueber Spiele, die nur die anderen Geraete haben.
 function cloudVergessen(){
+  cloudBasis = null;
   if(!cloudAn()) return;
+  // Ein Abgleich, der gerade unterwegs ist, gehoert zum alten Stand: stoppen,
+  // sonst schreibt er dessen Ergebnis ueber den eingespielten (kritiker t4).
+  cloudGen++; cloudLauf = null; cloudNochmal = false;
   cloud.rev = 0; cloud.sig = null; cloudMerken(); cloudBald();
 }
 
@@ -4987,7 +5034,7 @@ document.getElementById("app").addEventListener("click", function(ev){
   if(act==="standok"){ standDefekt=false; render(); return; }
   if(act==="reloadstate"){
     if(confirm("Stand des anderen Fensters laden? Was hier offen ist, geht verloren.")){
-      state = load(); standUebernommen(); cloud = cloudHolen();
+      state = load(); standUebernommen(); cloud = cloudHolen(); cloudBasis = null;
       fremdGeschrieben=false; view=restoreView(); render();
     }
     return;
@@ -5121,7 +5168,11 @@ document.getElementById("app").addEventListener("click", function(ev){
   }
   if(act==="rename"){
     var id=t.getAttribute("data-id"); var p=state.roster.find(function(x){return x.id===id;});
-    var nn=prompt("Neuer Name:", p?p.name:""); if(nn&&nn.trim()){ if(p.name!==nn.trim()){ p.name=nn.trim(); stempel(p); } save(); render(); } return;
+    var nn=prompt("Neuer Name:", p?p.name:""); if(nn&&nn.trim()){
+      var nnt=nn.trim();
+      if(p.name!==nnt && state.roster.some(function(x){ return x.id!==id && normName(x.name)===normName(nnt); })
+         && !confirm("„"+nnt+"“ gibt es schon. Trotzdem ein zweiter Spieler mit dem Namen?")) return;
+      if(p.name!==nnt){ p.name=nnt; stempel(p); } save(); render(); } return;
   }
   if(act==="del"){
     var id2=t.getAttribute("data-id"); var p2=state.roster.find(function(x){return x.id===id2;});
@@ -5427,7 +5478,7 @@ document.getElementById("app").addEventListener("click", function(ev){
 });
 
 // Test-Haken (fuer automatische Verifikation, stoert die App nicht)
-window.DARTS = { bullSieg:bullSieg, bullZurueck:bullZurueck, bullBilanz:bullBilanz,
+window.DARTS = { entschaerfen:entschaerfen, cloudBasis:function(){ return cloudBasis; }, bullSieg:bullSieg, bullZurueck:bullZurueck, bullBilanz:bullBilanz,
   bullStart:bullStart, bullTreffer:bullTreffer, bullWeitester:bullWeitester, bullRueckgaengig:bullRueckgaengig,
   bullAbbrechen:bullAbbrechen, bullReihe:bullReihe, getBullSpiel:function(){ return state.bullSpiel; }, checkout:checkout, dartValue:dartValue, startMatch:startMatch, applyDart:applyDart,
   syncOeffnen:syncOeffnen, syncSchliessen:syncSchliessen, syncSenden:syncSenden,
@@ -5530,12 +5581,20 @@ if(typeof document.addEventListener === "function"){
 // Schluessel. Ohne dieses Ohr ueberschreibt der eine Stand den anderen lautlos.
 if(typeof window.addEventListener === "function"){
   window.addEventListener("storage", function(ev){
-    // Das andere Fenster hat verbunden oder getrennt: dessen Merker gilt.
-    if(ev && ev.key === KEY_CLOUD){ cloudGen++; cloudLauf = null; cloud = cloudHolen(); render(); return; }
+    // Das andere Fenster hat verbunden, getrennt oder abgeglichen: dessen Merker
+    // gilt. Hat es eine neue Fassung gesehen, kennt DIESES Fenster deren Inhalt
+    // noch nicht - der naechste Abgleich holt dann voll statt "gleich".
+    if(ev && ev.key === KEY_CLOUD){
+      var cn = cloudHolen();
+      if(cn.code !== cloud.code){ cloudGen++; cloudLauf = null; cloudNochmal = false; cloudErst = null; cloudBasis = null; }
+      else if(cn.rev !== cloud.rev) cloudBasis = null;
+      cloud = cn; cloudZeichnen(); return;
+    }
     if(!ev || ev.key !== KEY) return;
     fremdGeschrieben = true;
-    if(!state.match && !state.train){        // nichts offen -> einfach uebernehmen
-      state = load(); standUebernommen(); cloud = cloudHolen();
+    // nichts offen -> einfach uebernehmen. Ein laufendes Bull-Spiel zaehlt als offen.
+    if(!state.match && !state.train && !(state.bullSpiel && !state.bullSpiel.fertig)){
+      state = load(); standUebernommen(); cloud = cloudHolen(); cloudBasis = null;
       fremdGeschrieben = false;
       view = restoreView();
     }

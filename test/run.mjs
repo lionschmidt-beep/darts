@@ -5717,7 +5717,7 @@ function fakeCloud() {
     if (!d || typeof d !== "object" || !Array.isArray(d.history) || !Array.isArray(d.roster))
       return { fehler: "format" };
     const roh = JSON.stringify(d);
-    if (roh.length > 2000000) return { fehler: "zu_gross" };
+    if (roh.length > 1000000) return { fehler: "zu_gross" };
     const r = rows.get(a.p_code);
     if (!r) {
       if ((a.p_rev || 0) !== 0) return { fehler: "unbekannt" };
@@ -5726,10 +5726,13 @@ function fakeCloud() {
     }
     if (a.p_rev == null || a.p_rev !== r.rev)
       return { konflikt: true, rev: r.rev, data: JSON.parse(r.data) };
-    const alt = JSON.parse(r.data);
-    const graeber = Object.keys(d.grab && typeof d.grab === "object" ? d.grab : {})
-      .filter(k => k.startsWith("h:")).length;
-    if (d.history.length + graeber < alt.history.length) return { fehler: "verlust" };
+    // Wie in SQL: jede id aus der Cloud steht noch da oder hat einen Grabstein.
+    const alt = JSON.parse(r.data), grab = d.grab && typeof d.grab === "object" ? d.grab : {};
+    for (const [art, feld] of [["h", "history"], ["p", "practice"], ["b", "bull"]]) {
+      const da = new Set((Array.isArray(d[feld]) ? d[feld] : []).map(e => e && e.id));
+      for (const e of (Array.isArray(alt[feld]) ? alt[feld] : []))
+        if (e && e.id != null && !da.has(e.id) && !((art + ":" + e.id) in grab)) return { fehler: "verlust" };
+    }
     r.data = roh; r.rev++;
     return { ok: true, rev: r.rev };
   }
@@ -5743,6 +5746,7 @@ function fakeCloud() {
     if (fn === "darts_pull") { c.pulls++; res = pull(a); }
     else if (fn === "darts_push") { c.pushes++; res = push(a); }
     else return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    if (res && res.fehler === "verlust") c.verluste = (c.verluste || 0) + 1;   // das Geraet wollte etwas verlieren
     const body = JSON.stringify(res === undefined ? null : res);
     const antwort = { ok: true, status: 200, json: () => Promise.resolve(JSON.parse(body)) };
     return c.bremse ? c.bremse().then(() => antwort) : Promise.resolve(antwort);
@@ -6201,6 +6205,135 @@ t("Cloud: Verlustschutz - ein Stand ohne Spiele ueberschreibt keinen mit Spielen
   // Mit Grabstein ist es ein echtes Loeschen und geht durch (siehe "Verlauf loeschen").
 });
 
+// --- Befunde des kritikers 28.10. (jeweils vorher rot nachgestellt) ---------
+t("Cloud: Verlustschutz prueft ids - ein Stand, dem ein ANDERES Spiel fehlt, wird abgelehnt", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  playMatch(A.D, ["lion", "arne"], 0);
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  const fremd = eintrag("hfremd123", Date.now(), "arne");
+  const r = await cl.fetch("x/rest/v1/rpc/darts_push", { body: JSON.stringify({
+    p_code: code, p_rev: 1, p_data: { v: 1, roster: [], history: [fremd], grab: {} } }) }).then(x => x.json());
+  eq(r.fehler, "verlust", "gleiche Anzahl, aber das Spiel aus der Cloud fehlt");
+  const mitGrab = await cl.fetch("x/rest/v1/rpc/darts_push", { body: JSON.stringify({
+    p_code: code, p_rev: 1, p_data: { v: 1, roster: [], history: [fremd],
+      grab: { ["h:" + A.D.getHistory()[0].id]: Date.now() } } }) }).then(x => x.json());
+  ok(mitGrab.ok, "mit Grabstein fuer genau dieses Spiel ist es ein Loeschen");
+});
+
+t("Cloud: zweites Fenster kennt die rev, aber nicht den Inhalt - es holt voll statt 'gleich'", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  // In B laeuft ein Spiel: den Stand des Nachbarfensters uebernimmt es dann nicht.
+  B.D.startMatch(["lion", "arne"], { gameType: 501, bestOf: 1 });
+  playMatch(A.D, ["lion", "arne"], 0);                  // Spiel X, nur in der Cloud
+  await takte([A], 1);
+  const X = A.D.getHistory()[0].id;
+  // Das Nachbarfenster von B hat abgeglichen und die neue rev in den Merker geschrieben.
+  B.store.set("darts_cloud", JSON.stringify(Object.assign({}, B.D.cloudStand(), { rev: A.D.cloudStand().rev, sig: "x" })));
+  (B.events.storage || []).forEach(f => f({ key: "darts_cloud" }));
+  await takte([B], 1);
+  const cloudIds = JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.map(m => m.id);
+  ok(cloudIds.includes(X), "Spiel X ist noch in der Cloud: " + cloudIds.join(","));
+  ok(B.D.getHistory().some(m => m.id === X), "und jetzt auch in B");
+  eq(B.D.cloudStand().status, "ok", "kein Dauer-'verlust'");
+  eq(cl.verluste || 0, 0, "B hat nie einen Stand ohne X hochgeschickt");
+});
+
+t("Cloud: Sicherung einspielen waehrend eines Abgleichs - nichts aus der Cloud geht verloren", async () => {
+  const cl = fakeCloud();
+  const A = geraet(cl), B = geraet(cl);
+  await A.D.cloudNeu(); await B.D.cloudVerbinden(A.D.cloudStand().code);
+  const S = boot();
+  playMatch(S.D, ["justus", "arne"], 0);
+  const sicherung = JSON.stringify(S.D.exportPayload());
+  playMatch(B.D, ["lion", "arne"], 0);                  // X
+  await takte([B, A], 1);                                // A kennt X und die aktuelle rev
+  const X = B.D.getHistory()[0].id;
+  let los; cl.bremse = () => new Promise(r => { los = r; });
+  const p = A.D.cloudAbgleich();
+  await schlaf(0);
+  eq(A.D.importText(sicherung), null, "eingespielt");
+  los(); cl.bremse = null;
+  await p;
+  await takte([A, B], 2);
+  const ids = JSON.parse(cl.rows.get(A.D.cloudStand().code).data).history.map(m => m.id);
+  ok(ids.includes(X), "X bleibt in der Cloud");
+  eq(ids.length, 2, "X und das Spiel aus der Sicherung");
+  eq(A.D.getHistory().length, 2, "A hat beide");
+  eq(A.D.cloudStand().status, "ok", "A haengt nicht im Dauer-'verlust'");
+  eq(cl.verluste || 0, 0, "A hat nie einen Stand ohne X hochgeschickt");
+});
+
+t("Cloud: laufendes Bull-Spiel uebersteht den Schreibzugriff des Nachbarfensters", () => {
+  const X = boot(), D = X.D, store = X.store;
+  D.bullStart(["lion", "arne"], 3);
+  D.bullTreffer("lion");
+  const nachbar = JSON.parse(store.get("darts_v2"));
+  nachbar.bullSpiel = null; nachbar._view = "home";
+  store.set("darts_v2", JSON.stringify(nachbar));
+  (X.events.storage || []).forEach(f => f({ key: "darts_v2" }));
+  ok(D.getBullSpiel() && D.getBullSpiel().players[0].leben === 4, "Spiel und Leben noch da");
+});
+
+t("Cloud: Team ohne Stempel - die hoehere Siegzahl gewinnt, nicht der Textvergleich", () => {
+  const { D } = boot();
+  const a = { roster: [{ id: "arne", name: "Arne", winsManual: 12 }], history: [] };
+  const b = { roster: [{ id: "arne", name: "Arne", winsManual: 3 }], history: [] };
+  eq(D.standVereinen(a, b).roster[0].winsManual, 12);
+  eq(D.standVereinen(b, a).roster[0].winsManual, 12, "egal wer zuerst");
+});
+
+t("Cloud: Namensvettern nur beim ersten Verbinden und nur ueber zwei Geraete", () => {
+  const { D } = boot();
+  const a = { roster: [{ id: "tim", name: "Tim", winsManual: 0 }, { id: "tim-2", name: "TIM ", winsManual: 0 }], history: [] };
+  const b = { roster: [{ id: "tim", name: "Tim", winsManual: 0 }, { id: "tim-2", name: "TIM ", winsManual: 0 }], history: [] };
+  eq(Object.keys(D.standVereinen(a, b).alias).length, 0, "spaeterer Abgleich legt nie zusammen");
+  eq(Object.keys(D.standVereinen(a, b, true).alias).length, 0, "beide auf derselben Seite: bewusst getrennt");
+  const c = { roster: [{ id: "lion", name: "Lion", winsManual: 0 }], history: [] };
+  const d = { roster: [{ id: "lionx", name: "lion", winsManual: 0 }], history: [] };
+  eq(JSON.stringify(D.standVereinen(c, d, true).alias), '{"lionx":"lion"}', "ueber zwei Geraete: zusammen");
+});
+
+t("Cloud: Umbenennen auf einen vergebenen Namen fragt nach", () => {
+  const ctx = boot();
+  ctx.D.setView("roster"); ctx.D.render();
+  ctx.answers.prompt = "arne"; ctx.answers.confirm = false;
+  ctx.click("rename", { "data-id": "lion" });
+  ok(ctx.D.getRoster().find(p => p.id === "lion").name === "Lion", "abgelehnt -> Name bleibt");
+  ctx.answers.confirm = true;
+  ctx.click("rename", { "data-id": "lion" });
+  eq(ctx.D.getRoster().find(p => p.id === "lion").name, "arne", "bestaetigt -> umbenannt");
+});
+
+t("Cloud: HTML aus dem gemeinsamen Stand kommt nicht in die Ansicht", async () => {
+  const boes = "<img src=x onerror=alert(1)>";
+  const m = eintrag("hboes1", Date.now(), "lion");
+  m.gameType = boes; m.legsA = boes; m.players[0].avg = boes;
+  const bull = { id: "bboes1", ts: Date.now(), art: "leben", winnerId: "lion", runden: boes, startLeben: 3,
+    players: [{ id: "lion", name: "Lion" }, { id: "arne", name: "Arne" }], raus: ["arne"], bulls: {} };
+  const cl = fakeCloud();
+  const A = geraet(cl);
+  await A.D.cloudNeu();
+  const code = A.D.cloudStand().code;
+  cl.rows.get(code).data = JSON.stringify({ v: 1, roster: [{ id: "lion", name: "Lion" }, { id: "arne", name: "Arne" }],
+    history: [m], practice: [], bull: [bull], grab: {}, eingefroren: {}, alias: {} });
+  cl.rows.get(code).rev = 9;
+  await A.D.cloudAbgleich();
+  eq(A.D.getHistory().length, 1, "der Eintrag ist da");
+  const tipp = at => A.app._listeners.click({ target: { getAttribute: k => (k in at ? at[k] : null), closest() { return this; } } });
+  for (const v of ["bull", "stats", "home", "h2h", "player"]) {
+    if (v === "h2h") tipp({ "data-act": "h2hopen", "data-a": "lion", "data-b": "arne" });
+    else if (v === "player") tipp({ "data-act": "openplayer", "data-id": "lion" });
+    else { A.D.setView(v); A.D.render(); }
+    ok(!/<img/i.test(A.app.innerHTML), "kein <img in " + v);
+    ok(v !== "h2h" || /gewinnt/.test(A.app.innerHTML), "Duell-Ansicht zeigt das Spiel");
+  }
+  eq(A.D.entschaerfen({ a: ["<b>", 1 / 0], "<x>": 1 }).a[0], "b", "tief entschaerft");
+});
+
 t("Cloud: Server-Fehler wird mit Grund angezeigt, nicht als offline versteckt", async () => {
   const cl = fakeCloud();
   const A = geraet(cl);
@@ -6510,6 +6643,12 @@ t("Bull-Leben: Anwurf wandert je Runde weiter, nur unter den Lebenden", () => {
   ok(!r.includes("justus"), "Justus ist nicht mehr in der Reihe");
   // Runde 2 ab arne, 3 ab justus, 4 ab lion, nach Justus' Aus: weiter ueber ihn hinweg.
   eq(r[0], "arne", "der Anwurf springt ueber den Ausgeschiedenen");
+  // Und er bleibt auch NICHT beim Ausgeschiedenen stehen: nach Arne kommt Lion,
+  // nach Lion wieder Arne (stuende er auf Justus, kaeme Lion zweimal dran).
+  D.bullWeitester("lion");
+  eq(D.bullReihe(D.getBullSpiel())[0].id, "lion", "nach Arne: Lion");
+  D.bullWeitester("arne");
+  eq(D.bullReihe(D.getBullSpiel())[0].id, "arne", "nach Lion: Arne, nicht zweimal Lion");
 });
 
 t("Bull-Leben: das Rad loest den Anwurf aus - und ist aus, wenn anwurfRad aus ist", () => {
