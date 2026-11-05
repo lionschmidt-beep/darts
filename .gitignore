@@ -3,3 +3,8 @@
 GRIND.md
 GRIND-Archiv.md
 .playwright-mcp/
+
+# Secrets nie committen (Sicherheits-Check 05.11.2026)
+.env
+.env.*
+!.env.example
